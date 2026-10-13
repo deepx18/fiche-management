@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -134,35 +133,28 @@ export default function LoginPage() {
             {/* Colonne démo */}
             <div className="hidden flex-col justify-center gap-md border-l border-outline-variant/60 bg-surface-low p-8 md:flex">
               <span className="text-label-table-header uppercase tracking-wider text-on-surface-variant">
-                Comptes de démonstration
+                Compte de démonstration
               </span>
               <p className="text-body-compact text-on-surface-variant">
-                Mot de passe commun : <code className="font-mono text-on-surface">demo1234</code>
+                Compte créé par <code className="font-mono text-on-surface">php artisan admin:create</code>.
               </p>
-              {[
-                { email: "admin@assurcore.ma", role: "Admin" },
-                { email: "superviseur@assurcore.ma", role: "Superviseur" },
-                { email: "agent@assurcore.ma", role: "Conseiller" },
-              ].map((c) => (
-                <button
-                  key={c.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(c.email);
-                    setPassword("demo1234");
-                  }}
-                  className="flex items-center justify-between rounded border border-outline-variant bg-surface-lowest px-md py-2 text-left hover:border-primary transition-colors"
-                >
-                  <span>
-                    <span className="block text-body-compact font-medium text-on-surface">{c.email}</span>
-                    <span className="text-label-badge text-on-surface-variant">{c.role}</span>
-                  </span>
-                  <span className="text-label-badge text-secondary">Utiliser</span>
-                </button>
-              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("admin@fiches.ma");
+                  setPassword("admin1234");
+                }}
+                className="flex items-center justify-between rounded border border-outline-variant bg-surface-lowest px-md py-2 text-left hover:border-primary transition-colors"
+              >
+                <span>
+                  <span className="block text-body-compact font-medium text-on-surface">admin@fiches.ma</span>
+                  <span className="text-label-badge text-on-surface-variant">Administrateur</span>
+                </span>
+                <span className="text-label-badge text-secondary">Utiliser</span>
+              </button>
               <p className="text-label-badge text-on-surface-variant">
-                Backend non implémenté : l&apos;authentification est simulée côté client (session de
-                démonstration). <Link href="/" className="underline">Accueil</Link>
+                Authentification réelle via l&apos;API Laravel (token Sanctum). L&apos;inscription publique
+                n&apos;existe pas : les comptes sont créés par un administrateur.
               </p>
             </div>
           </div>

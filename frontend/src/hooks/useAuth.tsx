@@ -26,13 +26,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const s = await api.login(email, password);
-    api.saveSession(s);
+    // login() sauvegarde déjà le token + la session côté services.
     setSession(s);
     return s;
   }, []);
 
   const logout = useCallback(() => {
-    api.clearSession();
+    void api.logout(); // révocation serveur + purge locale (token incluse)
     setSession(null);
   }, []);
 

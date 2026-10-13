@@ -12,12 +12,15 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Tableau de Bord", href: "/dashboard", icon: "M3 12l9-9 9 9M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10", roles: ["admin", "supervisor", "agent"] },
-  { label: "Production", href: "/production", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z", roles: ["admin", "supervisor", "agent"] },
-  { label: "Conseillers / Agents", href: "/agents", icon: "M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3", roles: ["admin", "supervisor", "agent"] },
-  { label: "Commissions & Primes", href: "/commissions", icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V6m0 12v-2m9-4a9 9 0 11-18 0 9 9 0 0118 0z", roles: ["admin", "supervisor"] },
-  { label: "Résiliations", href: "/cancellations", icon: "M13 17h8m0 0V9m0 8l-8-8-4 4-6-6", roles: ["admin", "supervisor"] },
-  { label: "Mon Espace Agent", href: "/my-space", icon: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z", roles: ["agent"] },
+  { label: "Fiches Contacts", href: "/fiches", icon: "M9 17v-6h4v6H9zm6-10h4a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h4m2-2h4a1 1 0 011 1v1H9V6a1 1 0 011-1z", roles: ["admin"] },
+  { label: "Historique Imports", href: "/historique", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z", roles: ["admin"] },
+  { label: "Extractions Doublons", href: "/extractions", icon: "M3 7h10v10H3V7zm14 0l4 4-4 4m4-4h-7", roles: ["admin"] },
+  //{ label: "Tableau de Bord", href: "/dashboard", icon: "M3 12l9-9 9 9M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10", roles: ["admin", "supervisor", "agent"] },
+  //{ label: "Production", href: "/production", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z", roles: ["admin", "supervisor", "agent"] },
+  //{ label: "Conseillers / Agents", href: "/agents", icon: "M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3", roles: ["admin", "supervisor", "agent"] },
+  //{ label: "Commissions & Primes", href: "/commissions", icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V6m0 12v-2m9-4a9 9 0 11-18 0 9 9 0 0118 0z", roles: ["admin", "supervisor"] },
+  //{ label: "Résiliations", href: "/cancellations", icon: "M13 17h8m0 0V9m0 8l-8-8-4 4-6-6", roles: ["admin", "supervisor"] },
+  //{ label: "Mon Espace Agent", href: "/my-space", icon: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z", roles: ["agent"] },
   { label: "Utilisateurs & Rôles", href: "/users", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z", roles: ["admin"] },
 ];
 
