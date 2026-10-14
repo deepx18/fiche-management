@@ -66,7 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Topbar />
       </div>*/}
 
-      <div className="lg:pl-64 lg:pt-16">
+      <div className="lg:pl-64 lg:pt-0">
         <main className="px-md py-lg lg:px-xl lg:py-xl">{children}</main>
       </div>
     </div>

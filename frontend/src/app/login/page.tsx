@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 
 const ROLE_HOME: Record<string, string> = {
-  admin: "/dashboard",
-  supervisor: "/dashboard",
+  admin: "/fiches",
+  supervisor: "/fiches",
   agent: "/my-space",
 };
 
@@ -21,7 +21,7 @@ export default function LoginPage() {
   // Déjà connecté → rediriger vers l'espace approprié (via useEffect)
   useEffect(() => {
     if (!loading && session) {
-      router.replace(ROLE_HOME[session.user.role] ?? "/dashboard");
+      router.replace(ROLE_HOME[session.user.role] ?? "/fiches");
     }
   }, [loading, session, router]);
 
@@ -31,7 +31,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const s = await login(email, password);
-      router.replace(ROLE_HOME[s.user.role] ?? "/dashboard");
+      router.replace(ROLE_HOME[s.user.role] ?? "/fiches");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connexion impossible.");
       setSubmitting(false);

@@ -286,7 +286,7 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
           aria-modal="true"
           aria-label="Confirmation d'extraction"
         >
-          <div className="w-full max-w-lg rounded-xl bg-surface-lowest p-lg shadow-lg">
+          <div className="w-full max-w-xl rounded-xl bg-surface-lowest p-lg shadow-lg">
             <h3 className="text-headline-sm text-on-surface">Confirmer l&apos;extraction</h3>
             <dl className="mt-md space-y-2 text-body-compact text-on-surface">
               <div className="flex justify-between">

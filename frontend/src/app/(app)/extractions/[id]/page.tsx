@@ -207,7 +207,7 @@ export default function ExtractionDetailPage({ params }: { params: Promise<{ id:
           aria-modal="true"
           aria-label="Confirmation de restauration"
         >
-          <div className="w-full max-w-lg rounded-xl bg-surface-lowest p-lg shadow-lg">
+          <div className="w-full max-w-xl rounded-xl bg-surface-lowest p-lg shadow-lg">
             <h3 className="text-headline-sm text-on-surface">Confirmer la restauration</h3>
             <p className="mt-md text-body-compact text-on-surface">
               Les {formatNumber(extraction.extracted_contacts.length)} contact(s) extraits redeviendront

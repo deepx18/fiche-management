@@ -54,9 +54,9 @@ class ImportHistoryController extends Controller
             'skipped_rows' => $h->skipped_rows,
             'error_summary' => $h->error_summary,
             'row_errors' => $h->row_errors,
-            // 'started_at' => $h->started_at?->toISOString(),
-            // 'completed_at' => $h->completed_at?->toISOString(),
-            // 'created_at' => $h->created_at?->toISOString(),
+            'started_at' =>  $h->started_at,
+            'completed_at' =>  $h->completed_at,
+            'created_at' =>  $h->created_at,
         ];
     }
 }

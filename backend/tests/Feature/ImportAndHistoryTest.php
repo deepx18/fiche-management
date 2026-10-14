@@ -33,7 +33,7 @@ class ImportAndHistoryTest extends TestCase
 
         $rows = [
             $this->headersRow(),
-            ['EL AMRANI', 'MOHAMMED', '12 rue des Lilas', 's:06801', 'CASABLANCA', 's:0612345678', 'mo@ex.ma', '12/05/1978'],
+            ['EL AMRANI', 'MOHAMMED', '12 rue des Lilas', 's:06801', 'CASABLANCA', 's:0612345678', 'mo@ex.ma', '1978-05-12'],
             ['BENALI', 'AHMED', '5 av. Hassan II', 's:20000', 'RABAT', 's:0612345678', null, null],
             ['Tazi', 'Sara', null, null, null, 's:06 99 88 77 66', 'sara@example.com', null],
         ];
@@ -69,7 +69,7 @@ class ImportAndHistoryTest extends TestCase
 
         $rows = [
             [' Nom ', 'Prenom', 'DATE DE NAISSANCE', 'Colonne inconnue'],
-            ['DUPONT', 'Léa', '01/02/1990', 'ne pas toucher'],
+            ['DUPONT', 'Léa', '1990-02-01', 'ne pas toucher'],
         ];
 
         $response = $this->postUploaded($token, $this->writeXlsx($rows, 'variants.xlsx'));

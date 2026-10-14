@@ -261,9 +261,9 @@ function AdminFormModal({
     ? password.length >= 8 && password === confirmation
     : name.trim().length > 0 && /.+@.+\..+/.test(email) && password.length >= 8 && password === confirmation;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-md" role="dialog" aria-modal="true">
-      <div className="w-full max-w-md rounded-xl bg-surface-lowest p-lg shadow-lg">
+  return (      
+      <div className="fixed h-full inset-0 z-50 flex items-center justify-center bg-black/40 px-md" role="dialog" aria-modal="true">
+      <div className="w-full max-w-3xl rounded-xl bg-surface-lowest p-lg shadow-lg">
         <h3 className="text-headline-sm text-on-surface">{title}</h3>
         <form
           className="mt-md space-y-md"
