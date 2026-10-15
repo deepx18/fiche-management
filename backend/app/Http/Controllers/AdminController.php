@@ -16,15 +16,53 @@ use Illuminate\Validation\ValidationException;
  */
 class AdminController extends Controller
 {
+    /** Colonnes triables autorisées pour la gestion des administrateurs. */
+    private const SORTABLE = ['name', 'email', 'created_at', 'id'];
+
     public function index(Request $request): JsonResponse
     {
-        $query = User::query()->orderBy('id');
+        $request->validate([
+            'created_from' => ['nullable', 'date'],
+            'created_to' => ['nullable', 'date'],
+            'sort_by' => ['nullable', 'in:'.implode(',', self::SORTABLE)],
+            'sort_direction' => ['nullable', 'in:asc,desc'],
+        ]);
+
+        $query = User::query();
 
         if ($search = trim((string) $request->query('search'))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%");
+            $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
+            $query->where(function ($q) use ($like) {
+                $q->where('name', 'like', $like)
+                    ->orWhere('email', 'like', $like);
             });
+        }
+
+        $active = $request->query('active');
+        if ($active === '1' || $active === 'active') {
+            $query->where('active', true);
+        } elseif ($active === '0' || $active === 'suspended') {
+            $query->where('active', false);
+        }
+
+        if ($from = $request->query('created_from')) {
+            $query->whereDate('created_at', '>=', $from);
+        }
+        if ($to = $request->query('created_to')) {
+            $query->whereDate('created_at', '<=', $to);
+        }
+
+        $sortBy = (string) $request->query('sort_by', 'id');
+        $direction = (string) $request->query('sort_direction', 'asc');
+        if (! in_array($sortBy, self::SORTABLE, true)) {
+            $sortBy = 'id';
+        }
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            $direction = 'asc';
+        }
+        $query->orderBy($sortBy, $direction);
+        if ($sortBy !== 'id') {
+            $query->orderBy('id');
         }
 
         $admins = $query->paginate(min(100, max(1, (int) $request->query('per_page', 50))));

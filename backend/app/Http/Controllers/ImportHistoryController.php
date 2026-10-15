@@ -12,21 +12,62 @@ use Illuminate\Http\Request;
  */
 class ImportHistoryController extends Controller
 {
+    /** Colonnes triables autorisées pour l'historique d'import. */
+    private const SORTABLE = [
+        'created_at', 'original_filename', 'status', 'successful_rows', 'failed_rows', 'total_rows', 'id',
+    ];
+
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'imported_from' => ['nullable', 'date'],
+            'imported_to' => ['nullable', 'date'],
+            'failed_min' => ['nullable', 'integer', 'min:0'],
+            'sort_by' => ['nullable', 'in:'.implode(',', self::SORTABLE)],
+            'sort_direction' => ['nullable', 'in:asc,desc'],
+        ]);
+
         $query = ImportHistory::query()->with(['importedFile:id,original_filename', 'user:id,name']);
 
         if ($search = trim((string) $request->query('search'))) {
-            $query->where('original_filename', 'like', "%{$search}%");
+            $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
+            $query->where('original_filename', 'like', $like);
         }
         if ($status = $request->query('status')) {
             if (in_array($status, [ImportHistory::STATUS_COMPLETED, ImportHistory::STATUS_PARTIAL, ImportHistory::STATUS_FAILED], true)) {
                 $query->where('status', $status);
             }
         }
+        if ($userId = $request->query('user_id')) {
+            $query->where('user_id', (int) $userId);
+        }
+        if ($from = $request->query('imported_from')) {
+            $query->whereDate('created_at', '>=', $from);
+        }
+        if ($to = $request->query('imported_to')) {
+            $query->whereDate('created_at', '<=', $to);
+        }
+        if ($request->filled('failed_min')) {
+            $query->where('failed_rows', '>=', (int) $request->query('failed_min'));
+        }
+
+        $sortBy = (string) $request->query('sort_by', 'created_at');
+        $direction = (string) $request->query('sort_direction', 'desc');
+        if (! in_array($sortBy, self::SORTABLE, true)) {
+            $sortBy = 'created_at';
+        }
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            $direction = 'desc';
+        }
+        if ($sortBy === 'created_at') {
+            // L'historique est chronologique : tri secondaire par id.
+            $query->orderBy('id', $direction);
+        } else {
+            $query->orderBy($sortBy, $direction)->orderByDesc('id');
+        }
 
         $perPage = min(100, max(1, (int) $request->query('per_page', 10)));
-        $rows = $query->orderByDesc('id')->paginate($perPage);
+        $rows = $query->paginate($perPage);
 
         return response()->json([
             'data' => collect($rows->items())->map(fn (ImportHistory $h) => $this->present($h)),

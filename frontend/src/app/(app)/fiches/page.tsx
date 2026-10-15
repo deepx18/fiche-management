@@ -6,6 +6,8 @@ import { StatCard } from "@/components/StatCard";
 import { Pagination } from "@/components/Pagination";
 import { SearchInput } from "@/components/SearchInput";
 import { SelectFilter } from "@/components/SelectFilter";
+import { DateInput } from "@/components/filters/DateInput";
+import { FilterPanel } from "@/components/filters/FilterPanel";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { EmptyState } from "@/components/EmptyState";
@@ -32,6 +34,18 @@ const STATUS_OPTIONS = [
 
 const MAX_SIZE_LABEL = "10 Mo";
 
+const SORT_OPTIONS = [
+  { value: "created_at:desc", label: "Importé — plus récent" },
+  { value: "created_at:asc", label: "Importé — plus ancien" },
+  { value: "original_filename:asc", label: "Fichier (A→Z)" },
+  { value: "original_filename:desc", label: "Fichier (Z→A)" },
+  { value: "successful_rows:desc", label: "Contacts (décroissant)" },
+  { value: "successful_rows:asc", label: "Contacts (croissant)" },
+  { value: "status:asc", label: "Statut" },
+];
+
+const PAGE_SIZES = [10, 25, 50, 100];
+
 export default function FichesPage() {
   return <FichesContent />;
 }
@@ -39,22 +53,53 @@ export default function FichesPage() {
 function FichesContent() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [adminId, setAdminId] = useState<number | "all">("all");
+  const [importedFrom, setImportedFrom] = useState("");
+  const [importedTo, setImportedTo] = useState("");
+  const [sort, setSort] = useState("created_at:desc");
+  const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
+
+  const [sortBy, sortDirection] = sort.split(":");
+
   const stats = useData(() => api.getContactStats(), []);
+  const admins = useData(() => api.listAdmins({ pageSize: 100 }), []);
   const files = useData(
     () =>
       api.listFiles({
         search,
         status: status as api.FileFilters["status"],
+        importedBy: adminId,
+        importedFrom,
+        importedTo,
+        sortBy,
+        sortDirection: sortDirection as api.SortDirection,
         page,
-        pageSize: 10,
+        pageSize,
       }),
-    [search, status, page],
+    [search, status, adminId, importedFrom, importedTo, sort, pageSize, page],
   );
 
   function resetPage() {
     setPage(1);
   }
+
+  function resetFilters() {
+    setSearch("");
+    setStatus("all");
+    setAdminId("all");
+    setImportedFrom("");
+    setImportedTo("");
+    setSort("created_at:desc");
+    setPageSize(10);
+    setPage(1);
+  }
+
+  const advancedCount = [adminId !== "all" ? "1" : "", importedFrom, importedTo].filter(Boolean).length;
+  const adminOptions = [
+    { value: "all", label: "Tous les administrateurs" },
+    ...(admins.data?.data ?? []).map((a) => ({ value: String(a.id), label: a.name })),
+  ];
 
   const data = files.data as api.Paginated<ImportedFile> | null;
 
@@ -84,25 +129,85 @@ function FichesContent() {
       <ImportCard onImported={() => files.retry()} />
 
       {/* Filtres */}
-      <div className="flex flex-wrap items-center gap-md rounded-xl bg-surface-lowest p-md shadow-sm">
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            resetPage();
-          }}
-          placeholder="Nom du fichier…"
-        />
-        <SelectFilter
-          value={status}
-          onChange={(v) => {
-            setStatus(v);
-            resetPage();
-          }}
-          options={STATUS_OPTIONS}
-          ariaLabel="Filtrer par statut d'import"
-        />
-      </div>
+      <FilterPanel
+        basic={
+          <>
+            <SearchInput
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+                resetPage();
+              }}
+              placeholder="Nom du fichier…"
+            />
+            <SelectFilter
+              value={status}
+              onChange={(v) => {
+                setStatus(v);
+                resetPage();
+              }}
+              options={STATUS_OPTIONS}
+              ariaLabel="Filtrer par statut d'import"
+            />
+            <SelectFilter
+              value={sort}
+              onChange={(v) => {
+                setSort(v);
+                resetPage();
+              }}
+              options={SORT_OPTIONS}
+              ariaLabel="Trier les fiches"
+            />
+          </>
+        }
+        activeCount={advancedCount}
+        reset={
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+          >
+            Effacer
+          </button>
+        }
+        advanced={
+          <>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Importé par</span>
+              <select
+                aria-label="Filtrer par administrateur importateur"
+                value={String(adminId)}
+                onChange={(e) => {
+                  setAdminId(e.target.value === "all" ? "all" : Number(e.target.value));
+                  resetPage();
+                }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {adminOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <DateInput label="Importé du" value={importedFrom} onChange={(v) => { setImportedFrom(v); resetPage(); }} />
+            <DateInput label="Importé au" value={importedTo} onChange={(v) => { setImportedTo(v); resetPage(); }} />
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Lignes par page</span>
+              <select
+                aria-label="Lignes par page"
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); resetPage(); }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </label>
+          </>
+        }
+      />
 
       {files.loading && !data ? (
         <PageSkeleton rows={6} />

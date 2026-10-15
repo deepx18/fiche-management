@@ -3,7 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Pagination } from "@/components/Pagination";
+import { SearchInput } from "@/components/SearchInput";
 import { SelectFilter } from "@/components/SelectFilter";
+import { DateInput } from "@/components/filters/DateInput";
+import { FilterPanel } from "@/components/filters/FilterPanel";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { EmptyState } from "@/components/EmptyState";
@@ -23,16 +26,78 @@ const STATUS_OPTIONS = [
   { value: "restored", label: "Restaurées" },
 ];
 
+const SORT_OPTIONS = [
+  { value: "created_at:desc", label: "Extraction — plus récente" },
+  { value: "created_at:asc", label: "Extraction — plus ancienne" },
+  { value: "extracted_count:desc", label: "Contacts extraits (décroissant)" },
+  { value: "source_file:asc", label: "Fiche source (A→Z)" },
+  { value: "performed_by:asc", label: "Administrateur (A→Z)" },
+  { value: "status:asc", label: "Statut" },
+];
+
+const PAGE_SIZES = [10, 25, 50, 100];
+
 export default function ExtractionsPage() {
   const [status, setStatus] = useState("all");
+  const [sourceFileId, setSourceFileId] = useState<number | "all">("all");
+  const [userId, setUserId] = useState<number | "all">("all");
+  const [contact, setContact] = useState("");
+  const [extractedFrom, setExtractedFrom] = useState("");
+  const [extractedTo, setExtractedTo] = useState("");
+  const [sort, setSort] = useState("created_at:desc");
+  const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
 
+  const [sortBy, sortDirection] = sort.split(":");
+
+  const files = useData(() => api.listFiles({ pageSize: 100 }), []);
+  const admins = useData(() => api.listAdmins({ pageSize: 100 }), []);
+
   const extractions = useData(
-    () => api.listExtractions({ status: status as api.ExtractionsFilters["status"], page, pageSize: 10 }),
-    [status, page],
+    () =>
+      api.listExtractions({
+        status: status as api.ExtractionsFilters["status"],
+        sourceFileId,
+        userId,
+        contact,
+        extractedFrom,
+        extractedTo,
+        sortBy,
+        sortDirection: sortDirection as api.SortDirection,
+        page,
+        pageSize,
+      }),
+    [status, sourceFileId, userId, contact, extractedFrom, extractedTo, sort, pageSize, page],
   );
 
   const data = extractions.data;
+
+  function resetFilters() {
+    setStatus("all");
+    setSourceFileId("all");
+    setUserId("all");
+    setContact("");
+    setExtractedFrom("");
+    setExtractedTo("");
+    setSort("created_at:desc");
+    setPageSize(10);
+    setPage(1);
+  }
+
+  const fileOptions = [
+    { value: "all", label: "Toutes les fiches" },
+    ...(files.data?.data ?? []).map((f) => ({ value: String(f.id), label: f.original_filename })),
+  ];
+  const adminOptions = [
+    { value: "all", label: "Tous les administrateurs" },
+    ...(admins.data?.data ?? []).map((a) => ({ value: String(a.id), label: a.name })),
+  ];
+  const advancedCount = [
+    sourceFileId !== "all" ? "1" : "",
+    userId !== "all" ? "1" : "",
+    extractedFrom,
+    extractedTo,
+  ].filter(Boolean).length;
 
   return (
     <div className="space-y-lg">
@@ -47,17 +112,103 @@ export default function ExtractionsPage() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-md rounded-xl bg-surface-lowest p-md shadow-sm">
-        <SelectFilter
-          value={status}
-          onChange={(v) => {
-            setStatus(v);
-            setPage(1);
-          }}
-          options={STATUS_OPTIONS}
-          ariaLabel="Filtrer par statut d'extraction"
-        />
-      </div>
+      <FilterPanel
+        activeCount={advancedCount}
+        reset={
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+          >
+            Effacer
+          </button>
+        }
+        basic={
+          <>
+            <SelectFilter
+              value={status}
+              onChange={(v) => {
+                setStatus(v);
+                setPage(1);
+              }}
+              options={STATUS_OPTIONS}
+              ariaLabel="Filtrer par statut d'extraction"
+            />
+            <SearchInput
+              value={contact}
+              onChange={(v) => {
+                setContact(v);
+                setPage(1);
+              }}
+              placeholder="Contact extrait (nom, téléphone)…"
+            />
+            <SelectFilter
+              value={sort}
+              onChange={(v) => {
+                setSort(v);
+                setPage(1);
+              }}
+              options={SORT_OPTIONS}
+              ariaLabel="Trier les extractions"
+            />
+          </>
+        }
+        advanced={
+          <>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Fiche source</span>
+              <select
+                aria-label="Filtrer par fiche source"
+                value={String(sourceFileId)}
+                onChange={(e) => {
+                  setSourceFileId(e.target.value === "all" ? "all" : Number(e.target.value));
+                  setPage(1);
+                }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {fileOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Administrateur</span>
+              <select
+                aria-label="Filtrer par administrateur"
+                value={String(userId)}
+                onChange={(e) => {
+                  setUserId(e.target.value === "all" ? "all" : Number(e.target.value));
+                  setPage(1);
+                }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {adminOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <DateInput label="Extrait du" value={extractedFrom} onChange={(v) => { setExtractedFrom(v); setPage(1); }} />
+            <DateInput label="Extrait au" value={extractedTo} onChange={(v) => { setExtractedTo(v); setPage(1); }} />
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Lignes par page</span>
+              <select
+                aria-label="Lignes par page"
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </label>
+          </>
+        }
+      />
 
       {extractions.loading && !data ? (
         <PageSkeleton rows={5} />

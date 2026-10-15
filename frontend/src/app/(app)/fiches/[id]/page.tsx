@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Pagination } from "@/components/Pagination";
 import { SearchInput } from "@/components/SearchInput";
+import { SelectFilter } from "@/components/SelectFilter";
+import { NumberInput } from "@/components/filters/DateInput";
+import { FilterPanel } from "@/components/filters/FilterPanel";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { EmptyState } from "@/components/EmptyState";
@@ -25,7 +28,16 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
 
   // Déclarés avant les hooks de données qui s'en servent dans leurs deps.
   const [contactSearch, setContactSearch] = useState("");
+  const [contactTel, setContactTel] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactVille, setContactVille] = useState("");
+  const [contactCp, setContactCp] = useState("");
+  const [contactSort, setContactSort] = useState("id:asc");
   const [contactPage, setContactPage] = useState(1);
+  const [dupPhone, setDupPhone] = useState("");
+  const [dupName, setDupName] = useState("");
+  const [dupMin, setDupMin] = useState("");
+  const [dupPage, setDupPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [scanShown, setScanShown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -33,11 +45,44 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [refreshFlag, setRefreshFlag] = useState(0);
 
+  const [contactSortBy, contactSortDirection] = contactSort.split(":");
+
   const contacts = useData(
-    () => api.listFileContacts(fileId, { search: contactSearch, page: contactPage, pageSize: 10 }),
-    [fileId, contactSearch, contactPage, refreshFlag],
+    () =>
+      api.listFileContacts(fileId, {
+        search: contactSearch,
+        tel: contactTel,
+        email: contactEmail,
+        ville: contactVille,
+        cp: contactCp,
+        sortBy: contactSortBy,
+        sortDirection: contactSortDirection as api.SortDirection,
+        page: contactPage,
+        pageSize: 10,
+      }),
+    [fileId, contactSearch, contactTel, contactEmail, contactVille, contactCp, contactSort, contactPage, refreshFlag],
   );
-  const duplicates = useData(() => api.getDuplicates(fileId), [fileId, refreshFlag]);
+  const duplicates = useData(
+    () => api.getDuplicates(fileId, { phone: dupPhone, name: dupName, minContacts: dupMin === "" ? "" : Number(dupMin), page: dupPage, pageSize: 20 }),
+    [fileId, dupPhone, dupName, dupMin, dupPage, refreshFlag],
+  );
+
+  function resetContactFilters() {
+    setContactSearch("");
+    setContactTel("");
+    setContactEmail("");
+    setContactVille("");
+    setContactCp("");
+    setContactSort("id:asc");
+    setContactPage(1);
+  }
+
+  function resetDuplicateFilters() {
+    setDupPhone("");
+    setDupName("");
+    setDupMin("");
+    setDupPage(1);
+  }
 
   if (detail.loading) return <PageSkeleton rows={8} />;
   if (detail.error) return <ErrorState message={detail.error} onRetry={detail.retry} />;
@@ -91,7 +136,13 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
       kind === "export"
         ? (await api.exportFileContents(fileId))
         : kind === "cleaned"
-          ? await api.exportFileCleaned(fileId)
+          ? await api.exportFileCleaned(fileId, {
+              search: contactSearch,
+              tel: contactTel,
+              email: contactEmail,
+              ville: contactVille,
+              cp: contactCp,
+            })
           : await api.downloadOriginalFile(fileId, file.original_filename);
     if (!ok) setMessage({ tone: "error", text: "Téléchargement impossible (fichier original indisponible ?)." });
     setBusy(false);
@@ -153,7 +204,7 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
               onClick={() => void download("cleaned")}
               disabled={busy}
               className="rounded bg-primary px-md py-1.5 text-body-compact font-medium text-on-primary hover:bg-primary-container transition-colors disabled:opacity-50"
-              title="Contacts actifs uniquement (contacts extraits exclus)"
+              title="Contacts actifs uniquement (extraits exclus) ; les filtres de la liste des contacts sont appliqués"
             >
               Export nettoyé (XLSX)
             </button>
@@ -231,10 +282,14 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
           <PageSkeleton rows={3} />
         ) : dupData.groups.length === 0 ? (
           <p className="text-body-compact text-on-surface-variant">
-            Aucun groupe de doublons détecté
-            {dupData.stats.without_usable_tel > 0
+            {[dupPhone, dupName, dupMin].some(Boolean)
+              ? "Aucun groupe ne correspond aux filtres actifs. Utilisez « Effacer » pour les réinitialiser."
+              : "Aucun groupe de doublons détecté"}
+            {![dupPhone, dupName, dupMin].some(Boolean) && dupData.stats.without_usable_tel > 0
               ? ` — ${dupData.stats.without_usable_tel} contact(s) sans numéro exploitable exclu(s).`
-              : "."}
+              : !([dupPhone, dupName, dupMin].some(Boolean))
+                ? "."
+                : ""}
           </p>
         ) : (
           <div className="space-y-md">
@@ -250,6 +305,51 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
               <span>{dupData.stats.total_active} contact(s) actifs</span>
             </div>
 
+            <FilterPanel
+              activeCount={[dupPhone, dupName, dupMin].filter(Boolean).length}
+              reset={
+                <button
+                  type="button"
+                  onClick={resetDuplicateFilters}
+                  className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+                >
+                  Effacer
+                </button>
+              }
+              basic={
+                <>
+                  <SearchInput
+                    value={dupPhone}
+                    onChange={(v) => {
+                      setDupPhone(v);
+                      setDupPage(1);
+                    }}
+                    placeholder="Téléphone…"
+                  />
+                  <SearchInput
+                    value={dupName}
+                    onChange={(v) => {
+                      setDupName(v);
+                      setDupPage(1);
+                    }}
+                    placeholder="Nom du contact…"
+                  />
+                </>
+              }
+              advanced={
+                <NumberInput
+                  label="Contacts minimum par groupe"
+                  min={1}
+                  value={dupMin}
+                  onChange={(v) => {
+                    setDupMin(v);
+                    setDupPage(1);
+                  }}
+                  placeholder="2"
+                />
+              }
+            />
+
             {dupData.groups.map((group, i) => (
               <DuplicateGroupCard
                 key={`${group.phone}-${i}`}
@@ -258,6 +358,8 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
                 toggle={toggle}
               />
             ))}
+
+            <Pagination page={dupPage} pageSize={dupData.meta.per_page} total={dupData.meta.total} onPageChange={setDupPage} />
 
             {dupData.groups.length > 0 ? (
               <div className="flex flex-wrap items-center justify-between gap-md border-t border-outline-variant/40 pt-md">
@@ -332,17 +434,93 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
       ) : null}
 
       {/* Contacts actifs */}
+      <FilterPanel
+        activeCount={[contactTel, contactEmail, contactVille, contactCp].filter(Boolean).length}
+        reset={
+          <button
+            type="button"
+            onClick={resetContactFilters}
+            className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+          >
+            Effacer
+          </button>
+        }
+        basic={
+          <>
+            <SearchInput
+              value={contactSearch}
+              onChange={(v) => {
+                setContactSearch(v);
+                setContactPage(1);
+              }}
+              placeholder="Nom, téléphone, email…"
+            />
+            <SelectFilter
+              value={contactSort}
+              onChange={(v) => {
+                setContactSort(v);
+                setContactPage(1);
+              }}
+              options={[
+                { value: "id:asc", label: "Ordre d'import" },
+                { value: "nom:asc", label: "Nom (A→Z)" },
+                { value: "nom:desc", label: "Nom (Z→A)" },
+                { value: "prenom:asc", label: "Prénom (A→Z)" },
+                { value: "ville:asc", label: "Ville (A→Z)" },
+                { value: "cp:asc", label: "Code postal" },
+                { value: "date_naissance:desc", label: "Naissance (récent)" },
+              ]}
+              ariaLabel="Trier les contacts"
+            />
+          </>
+        }
+        advanced={
+          <>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Téléphone</span>
+              <input
+                value={contactTel}
+                onChange={(e) => { setContactTel(e.target.value); setContactPage(1); }}
+                placeholder="06…"
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface placeholder:text-outline focus:outline-none focus:border-primary transition-colors"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Email</span>
+              <input
+                value={contactEmail}
+                onChange={(e) => { setContactEmail(e.target.value); setContactPage(1); }}
+                placeholder="nom@exemple.ma"
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface placeholder:text-outline focus:outline-none focus:border-primary transition-colors"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Ville</span>
+              <input
+                value={contactVille}
+                onChange={(e) => { setContactVille(e.target.value); setContactPage(1); }}
+                placeholder="Casablanca…"
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface placeholder:text-outline focus:outline-none focus:border-primary transition-colors"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Code postal</span>
+              <input
+                value={contactCp}
+                onChange={(e) => { setContactCp(e.target.value); setContactPage(1); }}
+                placeholder="20000…"
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface placeholder:text-outline focus:outline-none focus:border-primary transition-colors"
+              />
+            </label>
+          </>
+        }
+      />
       <section className="rounded-xl bg-surface-lowest shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-md p-md">
           <h2 className="text-headline-sm text-on-surface">Contacts actifs</h2>
-          <SearchInput
-            value={contactSearch}
-            onChange={(v) => {
-              setContactSearch(v);
-              setContactPage(1);
-            }}
-            placeholder="Nom, téléphone, email…"
-          />
+          <span className="text-label-badge text-on-surface-variant">
+            {contacts.data ? `${formatNumber(contacts.data.total)} contact(s)` : ""}
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -370,7 +548,14 @@ export default function FicheDetailPage({ params }: { params: Promise<{ id: stri
           </table>
         </div>
         {contacts.data && contacts.data.data.length === 0 ? (
-          <EmptyState title="Aucun contact actif" message="Tous les contacts de la fiche ont été extraits." />
+          <EmptyState
+            title="Aucun contact"
+            message={
+              [contactSearch, contactTel, contactEmail, contactVille, contactCp].some(Boolean)
+                ? "Aucun contact ne correspond aux filtres actifs. Utilisez « Effacer » pour les réinitialiser."
+                : "Tous les contacts de la fiche ont été extraits."
+            }
+          />
         ) : null}
         <div className="px-lg pb-md">
           {contacts.data ? (

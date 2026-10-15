@@ -2,6 +2,11 @@
 
 import { useState } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { Pagination } from "@/components/Pagination";
+import { SearchInput } from "@/components/SearchInput";
+import { SelectFilter } from "@/components/SelectFilter";
+import { DateInput } from "@/components/filters/DateInput";
+import { FilterPanel } from "@/components/filters/FilterPanel";
 import { useAuth } from "@/hooks/useAuth";
 import { RequireRole } from "@/components/RequireRole";
 import { ErrorState } from "@/components/ErrorState";
@@ -9,7 +14,24 @@ import { EmptyState } from "@/components/EmptyState";
 import { useData } from "@/hooks/useData";
 import * as api from "@/services";
 import { ApiError } from "@/services/api";
+import { formatNumber } from "@/lib/format";
 import type { AdminAccount } from "@/types/contact";
+
+const STATUS_OPTIONS = [
+  { value: "all", label: "Tous les statuts" },
+  { value: "active", label: "Actifs" },
+  { value: "suspended", label: "Suspendus" },
+];
+
+const SORT_OPTIONS = [
+  { value: "id:asc", label: "Création — plus ancien" },
+  { value: "id:desc", label: "Création — plus récent" },
+  { value: "name:asc", label: "Nom (A→Z)" },
+  { value: "name:desc", label: "Nom (Z→A)" },
+  { value: "email:asc", label: "Email (A→Z)" },
+];
+
+const PAGE_SIZES = [10, 25, 50, 100];
 
 export default function UsersPage() {
   return (
@@ -21,7 +43,29 @@ export default function UsersPage() {
 
 function UsersContent() {
   const { session } = useAuth();
-  const admins = useData(() => api.listAdmins({ pageSize: 50 }), []);
+  const [search, setSearch] = useState("");
+  const [activeStatus, setActiveStatus] = useState("all");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const [sort, setSort] = useState("id:asc");
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(1);
+  const [sortBy, sortDirection] = sort.split(":");
+
+  const admins = useData(
+    () =>
+      api.listAdmins({
+        search,
+        active: activeStatus as api.AdminFilters["active"],
+        createdFrom,
+        createdTo,
+        sortBy,
+        sortDirection: sortDirection as api.SortDirection,
+        page,
+        pageSize,
+      }),
+    [search, activeStatus, createdFrom, createdTo, sort, pageSize, page],
+  );
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -60,8 +104,9 @@ function UsersContent() {
           </span>
           <h1 className="text-headline-lg tracking-tight text-on-surface">Administrateurs</h1>
           <p className="text-body-compact text-on-surface-variant">
-            {rows.length} compte(s). Le dernier administrateur actif ne peut jamais être désactivé ni
-            supprimé ; votre propre compte ne peut pas être supprimé depuis cette vue.
+            {formatNumber(admins.data?.total ?? 0)} compte(s). Le dernier administrateur actif ne peut
+            jamais être désactivé ni supprimé ; votre propre compte ne peut pas être supprimé depuis
+            cette vue.
           </p>
         </div>
         <button
@@ -73,6 +118,53 @@ function UsersContent() {
           Nouvel administrateur…
         </button>
       </div>
+
+      <FilterPanel
+        activeCount={[activeStatus !== "all" ? "1" : "", createdFrom, createdTo].filter(Boolean).length}
+        reset={
+          <button
+            type="button"
+            onClick={() => {
+              setSearch("");
+              setActiveStatus("all");
+              setCreatedFrom("");
+              setCreatedTo("");
+              setSort("id:asc");
+              setPageSize(50);
+              setPage(1);
+            }}
+            className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+          >
+            Effacer
+          </button>
+        }
+        basic={
+          <>
+            <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="Nom ou email…" />
+            <SelectFilter value={activeStatus} onChange={(v) => { setActiveStatus(v); setPage(1); }} options={STATUS_OPTIONS} ariaLabel="Filtrer par statut de compte" />
+            <SelectFilter value={sort} onChange={(v) => { setSort(v); setPage(1); }} options={SORT_OPTIONS} ariaLabel="Trier les administrateurs" />
+          </>
+        }
+        advanced={
+          <>
+            <DateInput label="Créé du" value={createdFrom} onChange={(v) => { setCreatedFrom(v); setPage(1); }} />
+            <DateInput label="Créé au" value={createdTo} onChange={(v) => { setCreatedTo(v); setPage(1); }} />
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Lignes par page</span>
+              <select
+                aria-label="Lignes par page"
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </label>
+          </>
+        }
+      />
 
       {message ? (
         <p
@@ -89,7 +181,14 @@ function UsersContent() {
 
       {rows.length === 0 ? (
         <div className="rounded-xl bg-surface-lowest shadow-sm">
-          <EmptyState title="Aucun administrateur" message="Créez un premier compte administrateur." />
+          <EmptyState
+            title="Aucun administrateur"
+            message={
+              search || activeStatus !== "all" || createdFrom || createdTo
+                ? "Aucun compte ne correspond aux filtres actifs. Utilisez « Effacer » pour les réinitialiser."
+                : "Créez un premier compte administrateur."
+            }
+          />
         </div>
       ) : (
         <section className="overflow-hidden rounded-xl bg-surface-lowest shadow-sm">
@@ -194,6 +293,11 @@ function UsersContent() {
               })}
             </tbody>
           </table>
+          <div className="px-lg pb-md">
+            {admins.data ? (
+              <Pagination page={page} pageSize={admins.data.pageSize} total={admins.data.total} onPageChange={setPage} />
+            ) : null}
+          </div>
         </section>
       )}
 

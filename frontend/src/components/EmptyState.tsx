@@ -12,7 +12,7 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center py-xl text-center">
       <p className="text-headline-sm text-on-surface">{title}</p>
-      <p className="mt-1 max-w-sm text-body-compact text-on-surface-variant">{message}</p>
+      <p className="mt-1 max-w-3xl text-body-compact text-on-surface-variant">{message}</p>
       {action ? (
         <Link
           href={action.href}

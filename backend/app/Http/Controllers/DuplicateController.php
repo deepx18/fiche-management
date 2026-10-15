@@ -18,8 +18,18 @@ class DuplicateController extends Controller
 {
     public function index(Request $request, ImportedFile $file): JsonResponse
     {
+        $request->validate([
+            'phone' => ['nullable', 'string', 'max:30'],
+            'name' => ['nullable', 'string', 'max:255'],
+            'min_contacts' => ['nullable', 'integer', 'min:1'],
+        ]);
+
         $perPage = min(100, max(1, (int) $request->query('per_page', 20)));
-        $result = app(DuplicateDetector::class)->detect($file, $perPage);
+        $result = app(DuplicateDetector::class)->detect($file, $perPage, [
+            'phone' => $request->query('phone'),
+            'name' => $request->query('name'),
+            'min_contacts' => $request->query('min_contacts'),
+        ]);
 
         $groups = $result['groups'];
 

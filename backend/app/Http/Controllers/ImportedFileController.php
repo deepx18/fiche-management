@@ -25,12 +25,24 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  */
 class ImportedFileController extends Controller
 {
+    /** Colonnes triables autorisées pour la liste des fiches. */
+    private const FILE_SORTABLE = [
+        'original_filename', 'created_at', 'status', 'successful_rows', 'total_rows', 'failed_rows', 'id',
+    ];
+
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'imported_from' => ['nullable', 'date'],
+            'imported_to' => ['nullable', 'date'],
+            'sort_by' => ['nullable', 'in:'.implode(',', self::FILE_SORTABLE)],
+            'sort_direction' => ['nullable', 'in:asc,desc'],
+        ]);
+
         $query = ImportedFile::query()->with('importer')->withTrashed();
 
         if ($search = trim((string) $request->query('search'))) {
-            $query->where('original_filename', 'like', "%{$search}%");
+            $query->where('original_filename', 'like', '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%');
         }
 
         $status = $request->query('status');
@@ -44,10 +56,33 @@ class ImportedFileController extends Controller
             $query->whereNull('deleted_at');
         }
 
+        if ($importedBy = $request->query('imported_by')) {
+            $query->where('imported_by', (int) $importedBy);
+        }
+        if ($from = $request->query('imported_from')) {
+            $query->whereDate('created_at', '>=', $from);
+        }
+        if ($to = $request->query('imported_to')) {
+            $query->whereDate('created_at', '<=', $to);
+        }
+
+        $sortBy = (string) $request->query('sort_by', 'created_at');
+        $direction = (string) $request->query('sort_direction', 'desc');
+        if (! in_array($sortBy, self::FILE_SORTABLE, true)) {
+            $sortBy = 'created_at';
+        }
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            $direction = 'desc';
+        }
+        $query->orderBy($sortBy, $direction);
+        if ($sortBy !== 'id') {
+            $query->orderByDesc('id');
+        }
+
         $page = max(1, (int) $request->query('page', 1));
         $perPage = min(100, max(1, (int) $request->query('per_page', 10)));
 
-        $files = $query->orderByDesc('created_at')->paginate($perPage, ['*'], 'page', $page);
+        $files = $query->paginate($perPage, ['*'], 'page', $page);
 
         $rows = collect($files->items())->map(fn (ImportedFile $f) => $this->present($f));
 
@@ -123,18 +158,31 @@ class ImportedFileController extends Controller
         ]);
     }
 
+    /** Colonnes triables autorisées pour les contacts d'une fiche. */
+    private const CONTACT_SORTABLE = ['nom', 'prenom', 'cp', 'ville', 'tel', 'email', 'date_naissance', 'id'];
+
     public function contacts(Request $request, ImportedFile $file): JsonResponse
     {
-        $query = $file->contacts()->active()->orderBy('id');
+        $request->validate([
+            'sort_by' => ['nullable', 'in:'.implode(',', self::CONTACT_SORTABLE)],
+            'sort_direction' => ['nullable', 'in:asc,desc'],
+        ]);
 
-        if ($search = trim((string) $request->query('search'))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('nom', 'like', "%{$search}%")
-                    ->orWhere('prenom', 'like', "%{$search}%")
-                    ->orWhere('tel', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('ville', 'like', "%{$search}%");
-            });
+        $query = $file->contacts()->active();
+
+        $this->applyContactFilters($query, $request);
+
+        $sortBy = (string) $request->query('sort_by', 'id');
+        $direction = (string) $request->query('sort_direction', 'asc');
+        if (! in_array($sortBy, self::CONTACT_SORTABLE, true)) {
+            $sortBy = 'id';
+        }
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            $direction = 'asc';
+        }
+        $query->orderBy($sortBy, $direction);
+        if ($sortBy !== 'id') {
+            $query->orderBy('id');
         }
 
         $perPage = min(100, max(1, (int) $request->query('per_page', 10)));
@@ -144,6 +192,30 @@ class ImportedFileController extends Controller
             'data' => collect($contacts->items())->map(fn (Contact $c) => $this->presentContact($c)),
             'meta' => ['current_page' => $contacts->currentPage(), 'last_page' => $contacts->lastPage(), 'total' => $contacts->total(), 'per_page' => $contacts->perPage()],
         ]);
+    }
+
+    /**
+     * Filtres de contacts partagés (liste de fiche et export nettoyé filtré) :
+     * recherche groupée (OR) puis filtres colonne en AND.
+     */
+    private function applyContactFilters(\Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Eloquent\Relations\Relation $query, Request $request): void
+    {
+        if ($search = trim((string) $request->query('search'))) {
+            $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
+            $query->where(function ($q) use ($like) {
+                $q->where('nom', 'like', $like)
+                    ->orWhere('prenom', 'like', $like)
+                    ->orWhere('tel', 'like', $like)
+                    ->orWhere('email', 'like', $like)
+                    ->orWhere('ville', 'like', $like)
+                    ->orWhere('cp', 'like', $like);
+            });
+        }
+        foreach (['tel', 'email', 'ville', 'cp'] as $field) {
+            if ($value = trim((string) $request->query($field))) {
+                $query->where($field, 'like', '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value).'%');
+            }
+        }
     }
 
     /** Export de TOUS les contacts de la fiche (extraits inclus). */
@@ -157,10 +229,16 @@ class ImportedFileController extends Controller
         );
     }
 
-    /** Export nettoyé : uniquement les contacts actifs (extraits exclus). */
-    public function exportCleaned(ImportedFile $file): StreamedResponse
+    /**
+     * Export nettoyé : uniquement les contacts actifs (extraits exclus). Les
+     * filtres de la table des contacts sont honorés afin que l'export
+     * corresponde exactement à la sélection affichée (toutes pages confondues).
+     */
+    public function exportCleaned(Request $request, ImportedFile $file): StreamedResponse
     {
-        $contacts = $file->contacts()->active()->orderBy('id')->get();
+        $query = $file->contacts()->active();
+        $this->applyContactFilters($query, $request);
+        $contacts = $query->orderBy('id')->get();
 
         return app(ContactExporter::class)->download(
             $contacts,

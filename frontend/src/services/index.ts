@@ -13,7 +13,9 @@ import type {
 import type {
   AdminAccount,
   ContactRecord,
+  ContactSearchRecord,
   DashboardStats,
+  DuplicateFilters,
   DuplicateStats,
   DuplicateGroup,
   ExtractionDetail,
@@ -124,16 +126,27 @@ export async function getContactStats(): Promise<DashboardStats> {
 export interface FileFilters {
   search?: string;
   status?: "all" | ImportHistoryStatusAlias | "archived";
+  importedBy?: number | "all";
+  importedFrom?: string;
+  importedTo?: string;
+  sortBy?: string;
+  sortDirection?: SortDirection;
   page?: number;
   pageSize?: number;
 }
 
 type ImportHistoryStatusAlias = "imported" | "partial" | "failed";
+export type SortDirection = "asc" | "desc";
 
 export async function listFiles(filters: FileFilters = {}): Promise<Paginated<ImportedFile>> {
   const response = await apiGet<{ data: ImportedFile[]; meta: PageMeta }>("/api/files", {
     search: filters.search || undefined,
     status: filters.status && filters.status !== "all" ? filters.status : undefined,
+    imported_by: filters.importedBy && filters.importedBy !== "all" ? filters.importedBy : undefined,
+    imported_from: filters.importedFrom || undefined,
+    imported_to: filters.importedTo || undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
     page: filters.page,
     per_page: filters.pageSize,
   });
@@ -178,12 +191,30 @@ export async function getFile(id: number): Promise<(ImportedFile & { counts: Fil
   }
 }
 
+export interface FileContactFilters {
+  search?: string;
+  tel?: string;
+  email?: string;
+  ville?: string;
+  cp?: string;
+  sortBy?: string;
+  sortDirection?: SortDirection;
+  page?: number;
+  pageSize?: number;
+}
+
 export async function listFileContacts(
   id: number,
-  filters: { search?: string; page?: number; pageSize?: number } = {},
+  filters: FileContactFilters = {},
 ): Promise<Paginated<ContactRecord>> {
   const response = await apiGet<{ data: ContactRecord[]; meta: PageMeta }>(`/api/files/${id}/contacts`, {
     search: filters.search || undefined,
+    tel: filters.tel || undefined,
+    email: filters.email || undefined,
+    ville: filters.ville || undefined,
+    cp: filters.cp || undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
     page: filters.page,
     per_page: filters.pageSize,
   });
@@ -192,13 +223,19 @@ export async function listFileContacts(
 
 export async function getDuplicates(
   id: number,
-  page = 1,
+  filters: DuplicateFilters = {},
 ): Promise<{ groups: DuplicateGroup[]; stats: DuplicateStats; meta: PageMeta }> {
   const response = await apiGet<{
     data: DuplicateGroup[];
     stats: DuplicateStats;
     meta: PageMeta;
-  }>(`/api/files/${fileIdOf(id)}/duplicates`, { page });
+  }>(`/api/files/${fileIdOf(id)}/duplicates`, {
+    phone: filters.phone || undefined,
+    name: filters.name || undefined,
+    min_contacts: filters.minContacts === "" || filters.minContacts === undefined ? undefined : filters.minContacts,
+    page: filters.page,
+    per_page: filters.pageSize,
+  });
   return { groups: response.data, stats: response.stats, meta: response.meta };
 }
 
@@ -227,6 +264,13 @@ export async function extractContacts(
 
 export interface ExtractionsFilters {
   status?: "all" | "completed" | "restored";
+  sourceFileId?: number | "all";
+  userId?: number | "all";
+  contact?: string;
+  extractedFrom?: string;
+  extractedTo?: string;
+  sortBy?: string;
+  sortDirection?: SortDirection;
   page?: number;
   pageSize?: number;
 }
@@ -234,6 +278,13 @@ export interface ExtractionsFilters {
 export async function listExtractions(filters: ExtractionsFilters = {}): Promise<Paginated<ExtractionSummary>> {
   const response = await apiGet<{ data: ExtractionSummary[]; meta: PageMeta }>("/api/duplicate-extractions", {
     status: filters.status && filters.status !== "all" ? filters.status : undefined,
+    source_file_id: filters.sourceFileId && filters.sourceFileId !== "all" ? filters.sourceFileId : undefined,
+    user_id: filters.userId && filters.userId !== "all" ? filters.userId : undefined,
+    contact: filters.contact || undefined,
+    extracted_from: filters.extractedFrom || undefined,
+    extracted_to: filters.extractedTo || undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
     page: filters.page,
     per_page: filters.pageSize,
   });
@@ -268,6 +319,12 @@ export async function restoreExtraction(
 export interface HistoriesFilters {
   search?: string;
   status?: "all" | "completed" | "partial" | "failed";
+  userId?: number | "all";
+  importedFrom?: string;
+  importedTo?: string;
+  failedMin?: number | "";
+  sortBy?: string;
+  sortDirection?: SortDirection;
   page?: number;
   pageSize?: number;
 }
@@ -276,6 +333,12 @@ export async function listImportHistory(filters: HistoriesFilters = {}): Promise
   const response = await apiGet<{ data: ImportHistoryEntry[]; meta: PageMeta }>("/api/import-history", {
     search: filters.search || undefined,
     status: filters.status && filters.status !== "all" ? filters.status : undefined,
+    user_id: filters.userId && filters.userId !== "all" ? filters.userId : undefined,
+    imported_from: filters.importedFrom || undefined,
+    imported_to: filters.importedTo || undefined,
+    failed_min: filters.failedMin === "" || filters.failedMin === undefined ? undefined : filters.failedMin,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
     page: filters.page,
     per_page: filters.pageSize,
   });
@@ -306,8 +369,19 @@ export function exportFileContents(fileId: number): Promise<boolean> {
   return apiDownload(`/api/files/${fileId}/export`, "fiche-contact.xlsx");
 }
 
-export function exportFileCleaned(fileId: number): Promise<boolean> {
-  return apiDownload(`/api/files/${fileId}/cleaned-export`, "fiche-contact-cleaned.xlsx");
+export function exportFileCleaned(fileId: number, filters: FileContactFilters = {}): Promise<boolean> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries({
+    search: filters.search,
+    tel: filters.tel,
+    email: filters.email,
+    ville: filters.ville,
+    cp: filters.cp,
+  })) {
+    if (value) params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiDownload(`/api/files/${fileId}/cleaned-export${query ? `?${query}` : ""}`, "fiche-contact-cleaned.xlsx");
 }
 
 export function downloadOriginalFile(fileId: number, name: string): Promise<boolean> {
@@ -322,13 +396,82 @@ export function exportContactsAll(): Promise<boolean> {
   return apiDownload("/api/contacts/export", "contacts.xlsx");
 }
 
+/* ------------------------------------------------- recherche globale */
+
+export interface ContactSearchFilters {
+  q?: string;
+  fileId?: number | "all";
+  status?: "active" | "extracted" | "all";
+  ville?: string;
+  cp?: string;
+  importedFrom?: string;
+  importedTo?: string;
+  extractedFrom?: string;
+  extractedTo?: string;
+  sortBy?: string;
+  sortDirection?: SortDirection;
+  page?: number;
+  pageSize?: number;
+}
+
+/** Paramètres de recherche communs à la liste et à l'export filtré. */
+function contactSearchParams(filters: ContactSearchFilters): Record<string, string | number | undefined> {
+  return {
+    q: filters.q || undefined,
+    file_id: filters.fileId && filters.fileId !== "all" ? filters.fileId : undefined,
+    status: filters.status,
+    ville: filters.ville || undefined,
+    cp: filters.cp || undefined,
+    imported_from: filters.importedFrom || undefined,
+    imported_to: filters.importedTo || undefined,
+    extracted_from: filters.extractedFrom || undefined,
+    extracted_to: filters.extractedTo || undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
+    page: filters.page,
+    per_page: filters.pageSize,
+  };
+}
+
+export async function searchContacts(filters: ContactSearchFilters = {}): Promise<Paginated<ContactSearchRecord>> {
+  const response = await apiGet<{ data: ContactSearchRecord[]; meta: PageMeta }>(
+    "/api/contact-search",
+    contactSearchParams(filters),
+  );
+  return toPaginated(response);
+}
+
+/** Export Excel de TOUS les résultats filtrés (toutes pages confondues). */
+export function exportContactSearch(filters: ContactSearchFilters = {}): Promise<boolean> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(contactSearchParams(filters))) {
+    if (value !== undefined && key !== "page" && key !== "per_page") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiDownload(`/api/contact-search/export${query ? `?${query}` : ""}`, "recherche-contacts.xlsx");
+}
+
 /* -------------------------------------------------- administrateurs */
 
-export async function listAdmins(
-  filters: { search?: string; page?: number; pageSize?: number } = {},
-): Promise<Paginated<AdminAccount>> {
+export interface AdminFilters {
+  search?: string;
+  active?: "all" | "active" | "suspended";
+  createdFrom?: string;
+  createdTo?: string;
+  sortBy?: string;
+  sortDirection?: SortDirection;
+  page?: number;
+  pageSize?: number;
+}
+
+export async function listAdmins(filters: AdminFilters = {}): Promise<Paginated<AdminAccount>> {
   const response = await apiGet<{ data: AdminAccount[]; meta: PageMeta }>("/api/admins", {
     search: filters.search || undefined,
+    active: filters.active && filters.active !== "all" ? filters.active : undefined,
+    created_from: filters.createdFrom || undefined,
+    created_to: filters.createdTo || undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
     page: filters.page,
     per_page: filters.pageSize,
   });

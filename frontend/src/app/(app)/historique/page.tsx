@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Pagination } from "@/components/Pagination";
 import { SearchInput } from "@/components/SearchInput";
 import { SelectFilter } from "@/components/SelectFilter";
+import { DateInput, NumberInput } from "@/components/filters/DateInput";
+import { FilterPanel } from "@/components/filters/FilterPanel";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { EmptyState } from "@/components/EmptyState";
@@ -26,23 +28,69 @@ const STATUS_OPTIONS = [
   { value: "failed", label: "Échecs" },
 ];
 
+const SORT_OPTIONS = [
+  { value: "created_at:desc", label: "Import — plus récent" },
+  { value: "created_at:asc", label: "Import — plus ancien" },
+  { value: "original_filename:asc", label: "Fichier (A→Z)" },
+  { value: "original_filename:desc", label: "Fichier (Z→A)" },
+  { value: "status:asc", label: "Statut" },
+  { value: "successful_rows:desc", label: "Lignes réussies (décroissant)" },
+  { value: "failed_rows:desc", label: "Lignes échouées (décroissant)" },
+];
+
+const PAGE_SIZES = [10, 25, 50, 100];
+
 export default function HistoriquePage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [userId, setUserId] = useState<number | "all">("all");
+  const [importedFrom, setImportedFrom] = useState("");
+  const [importedTo, setImportedTo] = useState("");
+  const [failedMin, setFailedMin] = useState("");
+  const [sort, setSort] = useState("created_at:desc");
+  const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
+
+  const [sortBy, sortDirection] = sort.split(":");
+
+  const admins = useData(() => api.listAdmins({ pageSize: 100 }), []);
 
   const histories = useData(
     () =>
       api.listImportHistory({
         search,
         status: status as api.HistoriesFilters["status"],
+        userId,
+        importedFrom,
+        importedTo,
+        failedMin: failedMin === "" ? "" : Number(failedMin),
+        sortBy,
+        sortDirection: sortDirection as api.SortDirection,
         page,
-        pageSize: 10,
+        pageSize,
       }),
-    [search, status, page],
+    [search, status, userId, importedFrom, importedTo, failedMin, sort, pageSize, page],
   );
 
   const data = histories.data;
+
+  function resetFilters() {
+    setSearch("");
+    setStatus("all");
+    setUserId("all");
+    setImportedFrom("");
+    setImportedTo("");
+    setFailedMin("");
+    setSort("created_at:desc");
+    setPageSize(10);
+    setPage(1);
+  }
+
+  const adminOptions = [
+    { value: "all", label: "Tous les administrateurs" },
+    ...(admins.data?.data ?? []).map((a) => ({ value: String(a.id), label: a.name })),
+  ];
+  const advancedCount = [userId !== "all" ? "1" : "", importedFrom, importedTo, failedMin].filter(Boolean).length;
 
   return (
     <div className="space-y-lg">
@@ -57,25 +105,86 @@ export default function HistoriquePage() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-md rounded-xl bg-surface-lowest p-md shadow-sm">
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            setPage(1);
-          }}
-          placeholder="Nom du fichier…"
-        />
-        <SelectFilter
-          value={status}
-          onChange={(v) => {
-            setStatus(v);
-            setPage(1);
-          }}
-          options={STATUS_OPTIONS}
-          ariaLabel="Filtrer par statut d'import"
-        />
-      </div>
+      <FilterPanel
+        activeCount={advancedCount}
+        reset={
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="rounded border border-outline-variant px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
+          >
+            Effacer
+          </button>
+        }
+        basic={
+          <>
+            <SearchInput
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+                setPage(1);
+              }}
+              placeholder="Nom du fichier…"
+            />
+            <SelectFilter
+              value={status}
+              onChange={(v) => {
+                setStatus(v);
+                setPage(1);
+              }}
+              options={STATUS_OPTIONS}
+              ariaLabel="Filtrer par statut d'import"
+            />
+            <SelectFilter
+              value={sort}
+              onChange={(v) => {
+                setSort(v);
+                setPage(1);
+              }}
+              options={SORT_OPTIONS}
+              ariaLabel="Trier l'historique"
+            />
+          </>
+        }
+        advanced={
+          <>
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Importé par</span>
+              <select
+                aria-label="Filtrer par administrateur"
+                value={String(userId)}
+                onChange={(e) => {
+                  setUserId(e.target.value === "all" ? "all" : Number(e.target.value));
+                  setPage(1);
+                }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {adminOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <DateInput label="Importé du" value={importedFrom} onChange={(v) => { setImportedFrom(v); setPage(1); }} />
+            <DateInput label="Importé au" value={importedTo} onChange={(v) => { setImportedTo(v); setPage(1); }} />
+            <NumberInput label="Lignes échouées minimum" value={failedMin} onChange={(v) => { setFailedMin(v); setPage(1); }} placeholder="0" />
+            <label className="flex flex-col gap-1">
+              <span className="text-label-badge text-on-surface-variant">Lignes par page</span>
+              <select
+                aria-label="Lignes par page"
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="bg-surface-lowest border border-outline-variant rounded px-md py-1.5 text-body-compact text-on-surface focus:outline-none focus:border-primary transition-colors"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </label>
+          </>
+        }
+      />
 
       {histories.loading && !data ? (
         <PageSkeleton rows={6} />

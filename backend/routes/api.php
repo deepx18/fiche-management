@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ContactController;
+use App\Http\Controllers\ContactSearchController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DuplicateController;
 use App\Http\Controllers\ExtractionController;
@@ -51,6 +52,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Contacts (toutes fiches) + export global.
         Route::get('/contacts', [ContactController::class, 'index']);
         Route::get('/contacts/export', [ContactController::class, 'export']);
+
+        // Recherche globale de contacts (toutes fiches) + export filtré.
+        Route::get('/contact-search', [ContactSearchController::class, 'index']);
+        Route::get('/contact-search/export', [ContactSearchController::class, 'export']);
 
         // Historique d'import.
         Route::get('/import-history', [ImportHistoryController::class, 'index']);

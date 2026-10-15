@@ -6,10 +6,13 @@ téléphoniques, extraction conservatrice des contacts en doublon, exports
 nettoyés et restaurations.
 
 - `backend/` — API Laravel 12 (authentification Sanctum tokenizer, Excel via
-  maatwebsite/excel + PhpSpreadsheet, tests PHPUnit).
-- `frontend/` — Next.js 16 (React 19, Tailwind 4) existant, connecté à l'API
+  maatwebsite/excel + PhpSpreadsheet, tests PHPUnit).- `frontend/` — Next.js 16 (React 19, Tailwind 4) existant, connecté à l'API
   via un proxy la même-origine (`/api/*` → Laravel), sans qu'aucun écran ne
-  dépende de données fictives pour le module contact.
+dépende de données fictives pour le module contact. Une page **Recherche
+globale** (`/recherche`) interroge les contacts de toutes les fiches, et
+chaque table (fiches, contacts d'une fiche, historique d'import, extractions,
+doublons, administrateurs) dispose de filtres, d'un tri et d'une pagination
+côté serveur.
 
 ## 1. Prérequis
 
@@ -171,6 +174,11 @@ GET    /api/files/{id}/duplicates              — scan lecture seule
 POST   /api/files/{id}/duplicates/extract      — extraction transactionnelle
 GET    /api/import-history[/{id}]
 GET    /api/contacts | GET /api/contacts/export
+GET    /api/contact-search                    — recherche globale (toutes fiches)
+         params : q, file_id, status(active|extracted|all), ville, cp,
+         imported_from, imported_to, extracted_from, extracted_to,
+         sort_by, sort_direction, page, per_page
+GET    /api/contact-search/export             — export filtré (tous les résultats)
 GET    /api/duplicate-extractions[/{id}] | …/export | POST …/restore
 GET|POST|PATCH|DELETE /api/admins[/{id}]       — administrateurs (dernier actif protégé)
 ```
@@ -191,7 +199,12 @@ Toutes les routes sauf `login` exigent un token Sanctum et un compte
 - extraction (sélection individuelle, refus trans-fiche/ids invalides,
   double extraction, résultat nettoyé cohérent), exports complète/nettoyé/
   extraits (lecture vraie du XLSX produit),
-- restauration (contacts réactifs sans duplication, audit conservé).
+- restauration (contacts réactifs sans duplication, audit conservé),
+- recherche globale (nom/prénom/téléphone/email/ville/CP/adresse/fiche source,
+  formatage téléphonique, recherches inter-fiches, filtres combinés, statut
+  actif/extrait, tri, pagination, plage de dates, export filtré complet),
+- filtres/tris/pagination de chaque table (fiches, contacts, historique,
+  extractions, doublons, administrateurs) avec rejet des tris inconnus.
 
 ## 11. Déploiement (résumé)
 

@@ -37,6 +37,16 @@ export interface ContactRecord {
   source_file?: { id: number; original_filename: string | null } | null;
 }
 
+/** Statut d'un contact dans la recherche globale. */
+export type ContactStatus = "active" | "extracted";
+
+/** Résultat de la recherche globale (GET /api/contact-search). */
+export interface ContactSearchRecord extends ContactRecord {
+  status: ContactStatus;
+  extracted_at: string | null;
+  source_file: { id: number; original_filename: string | null } | null;
+}
+
 export interface DuplicateContact {
   id: number;
   nom: string;
@@ -52,6 +62,14 @@ export interface DuplicateGroup {
   contacts: DuplicateContact[];
 }
 
+export interface DuplicateFilters {
+  phone?: string;
+  name?: string;
+  minContacts?: number | "";
+  page?: number;
+  pageSize?: number;
+}
+
 export interface DuplicateStats {
   total_active: number;
   duplicate_groups: number;
@@ -59,6 +77,7 @@ export interface DuplicateStats {
   without_usable_tel: number;
   not_in_any_group: number;
   extracted_contacts: number;
+  filtered_groups: number;
 }
 
 export interface ExtractionSummary {
