@@ -235,10 +235,12 @@ Google Sheets et permet aux administrateurs de saisir les numéros de téléphon
 des clients, puis de sélectionner des lignes en vue d'une future vérification
 d'appels.
 
-> **Périmètre** : seule la Phase 1 est implémentée. Aucune intégration Kavkom /
-> Issabel, aucune recherche d'appels, aucun stockage audio, aucune transcription
-> ni validation de contrat n'existe dans le code. Le bouton « Vérifier les
-> appels » de l'interface est **désactivé** et étiqueté « Phase 2 ».
+> **Périmètre** : les Phases 1 et 2 sont implémentées. La Phase 2 ajoute la
+> recherche d'appels (Issabel par CDR, Kavkom par webhook CDR), le stockage de
+> métadonnées et la récupération d'enregistrements privés. La transcription,
+> Whisper et la validation de contrat restent **hors périmètre** (Phase 3).
+> Voir `docs/phase-2-telephony.md` pour les capacités vérifiées, les limites
+> fournisseur et la checklist de validation réelle.
 
 ### 12.1 Configuration
 
@@ -324,10 +326,10 @@ ils sont comparés après normalisation (casse, accents et espaces ignorés).
   `06 12 34 56 78 → +33612345678`. La valeur saisie (original) est conservée
   pour l'affichage et l'audit.
 - La colonne `phone` est saisie dans l'application ; une colonne dérivée
-  `phone_normalise` (chiffres) sert à la recherche dans la table. Une classe
-  partagée `App\Support\TelephonyNormalizer` fournit la même forme E.164 pour
-  les futures requêtes Kavkom et Issabel, de façon à ce que la normalisation
-  reste cohérente entre saisie et recherche d'appels.
+  `phone_normalise` (chiffres) sert à la recherche dans la table. La Phase 2
+  utilise `App\Services\Telephony\TelephonyNumber` pour la forme E.164 et la
+  comparaison avec les valeurs Kavkom/Issabel ; `App\Support\TelephonyNormalizer`
+  reste un adaptateur de compatibilité.
 - **Synchronisation** : la synchronisation Google Sheets ne modifie jamais le
   champ `phone` (champs possédés par la feuille uniquement) ; un numéro saisi
   manuellement survit à chaque import.
@@ -397,17 +399,43 @@ cd ../frontend && npm run dev  # http://localhost:3000/production
 | Téléphones qui disparaissent | Ne se produit pas par conception ; vérifier qu'aucun code n'écrit `phone` hors `PATCH /phone` |
 | Synchronisation lente | La lecture est bornée par `GOOGLE_SHEETS_RANGE` ; réduire la plage. Un import en file d'attente pour de très gros volumes est un évolution future documentée |
 
-## 13. Limites connues
+## 13. Module Téléphonie — Phase 2
+
+La Phase 2 est documentée en détail dans **`docs/phase-2-telephony.md`**.
+Points essentiels :
+
+- **Kavkom** : l'API documentée ne fournit pas de recherche d'historique ni de
+  téléchargement audio. Les CDR sont ingérés par webhook (secret partagé) ; la
+  recherche affiche un état `unsupported`, jamais « aucun appel ».
+- **Issabel** : lecture d'une base CDR MySQL dédiée en **lecture seule**, avec
+  colonnes optionnelles détectées, et récupération des fichiers audio depuis un
+  répertoire privé configuré. Cette méthode doit être confirmée sur le PBX réel.
+- **Numéros** : normalisation E.164 avec `FR` par défaut ; un indicatif étranger
+  n'est jamais réécrit. Un numéro partagé rend la recherche ambiguë et bloque
+  toute association automatique.
+- **Asynchrone** : `POST /api/production/calls/search` crée un lot et dispatche
+  des jobs ; l'interface interroge le statut par fournisseur. Un échec, une
+  capacité non prise en charge et un vrai « aucun appel » sont distincts.
+- **Enregistrements** : stockage privé, nom opaque, type MIME et taille
+  vérifiés, téléchargement réservé aux administrateurs, purge configurable via
+  `php artisan telephony:prune-recordings`.
+
+**Aucun test live Kavkom/Issabel n'a été exécuté** dans cet environnement
+(absence d'identifiants et d'accès). Les tests automatisés utilisent des
+fournisseurs simulés. La checklist de validation réelle et les blocages sont
+dans `docs/phase-2-telephony.md`.
+
+## 14. Limites connues
 
 - La détection de doublons téléphoniques (§6/§7) ne rapproche pas les formats
   locaux et internationaux (choix assumé : éviter les faux positifs).
 - La validation téléphonique de la saisie Production (§12.4) utilise
   `libphonenumber` avec la région `FR` par défaut et exige un numéro valide
   pour la France : un numéro étranger (ex. `+32 …`) est refusé et ne sera pas
-  réinterprété comme français. La même bibliothèque est prévue pour la
-  normalisation E.164 des requêtes Kavkom/Issabel via
-  `App\Support\TelephonyNormalizer` ; les appels réels aux fournisseurs ne sont
-  pas implémentés en Phase 1.
+  réinterprété comme français. La Phase 2 réutilise cette normalisation pour
+  les recherches Kavkom/Issabel via `TelephonyNumber` ; les appels réels aux
+  fournisseurs n'ont pas été validés dans cet environnement (voir §13 et
+  `docs/phase-2-telephony.md`).
 - Imports synchrones : conçus pour des fichiers de taille raisonnable
   (≤ 10 Mo) ; de très gros volumes justifieraient un import en file d'attente.
 - Pages « héréditaires » de la démo initiale (agents/commissions/résiliations,
@@ -417,9 +445,13 @@ cd ../frontend && npm run dev  # http://localhost:3000/production
 - Module Production (Phase 1) : la synchronisation est synchrone et bornée par
   la plage configurée ; elle n'a pas été validée contre un classeur Google réel
   dans cet environnement (les tests utilisent un client simulé / `Http::fake`).
-  La vérification d'appels (Phase 2/3) n'est pas implémentée ; l'édition du
-  téléphone, la validation libphonenumber et la protection contre l'écrasement
-  par la synchronisation sont implémentées.
+  L'édition du téléphone, la validation libphonenumber et la protection contre
+  l'écrasement par la synchronisation sont implémentées.
+- Module Téléphonie (Phase 2) : les adaptateurs sont testés avec des réponses
+  simulées, sans identifiants réels. Kavkom ne documente pas de recherche
+  d'historique ni de téléchargement audio ; Issabel doit être confirmé (schéma
+  CDR, colonne `recordingfile`, répertoire des enregistrements, droits du compte
+  MySQL). Aucune transcription ni décision de validation n'est implémentée.
 - Suppression d'un compte administrateur : immédiate (révocation de ses
   tokens) ; l'audit d'import/extraction conserve les noms affichés au moment
   des opérations, sauf re-création ultérieure du même nom.

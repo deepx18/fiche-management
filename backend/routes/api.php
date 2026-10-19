@@ -2,13 +2,16 @@
 
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CallRecordingController;
+use App\Http\Controllers\CallSearchController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\ContactSearchController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DuplicateController;
 use App\Http\Controllers\ExtractionController;
-use App\Http\Controllers\ImportHistoryController;
 use App\Http\Controllers\ImportedFileController;
+use App\Http\Controllers\ImportHistoryController;
+use App\Http\Controllers\KavkomWebhookController;
 use App\Http\Controllers\ProductionController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +25,12 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:30,1')->name('login');
+
+// Webhook Kavkom : pas de session Sanctum, authentification par secret
+// partagé dans un en-tête configuré côté Kavkom (voir config/telephony.php).
+Route::post('/webhooks/kavkom/cdr', KavkomWebhookController::class)
+    ->middleware('throttle:120,1')
+    ->name('webhooks.kavkom.cdr');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'me']);
@@ -64,6 +73,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/production/syncs', [ProductionController::class, 'syncs']);
         Route::post('/production/sync', [ProductionController::class, 'sync']);
         Route::patch('/production/{record}/phone', [ProductionController::class, 'updatePhone'])->whereNumber('record');
+
+        // Phase 2 : recherche d'appels asynchrone, statut par fournisseur,
+        // appels stockés et téléchargement privé des enregistrements.
+        Route::post('/production/calls/search', [CallSearchController::class, 'store'])->middleware('throttle:30,1');
+        Route::get('/production/calls/searches/{search}', [CallSearchController::class, 'show'])->whereNumber('search');
+        Route::get('/production/calls/searches/{search}/calls', [CallSearchController::class, 'calls'])->whereNumber('search');
+        Route::get('/production/{record}/calls', [CallSearchController::class, 'recordCalls'])->whereNumber('record');
+        Route::post('/calls/{call}/recording/retrieve', [CallSearchController::class, 'retrieveRecording'])->whereNumber('call')->middleware('throttle:30,1');
+        Route::get('/calls/{call}/recording', [CallRecordingController::class, 'show'])->whereNumber('call');
 
         // Historique d'import.
         Route::get('/import-history', [ImportHistoryController::class, 'index']);

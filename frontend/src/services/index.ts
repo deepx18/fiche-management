@@ -29,6 +29,11 @@ import type {
   ProductionRecord,
   ProductionSyncSummary,
 } from "@/types/production";
+import type {
+  CallRecord,
+  CallSearch,
+  CallSearchItem,
+} from "@/types/telephony";
 import * as mock from "@/data/mock";
 import {
   ApiError,
@@ -593,6 +598,64 @@ export async function updateProductionPhone(id: number, phone: string): Promise<
     { phone },
   );
   return response.data;
+}
+
+/* ------------------------------------------------------ téléphonie (Phase 2) */
+
+export interface CallSearchInput {
+  recordIds: number[];
+  from?: string;
+  to?: string;
+  providers?: string[];
+  retrieveRecordings?: boolean;
+}
+
+/** Lance une recherche asynchrone : la requête ne contacte jamais un fournisseur. */
+export async function searchProductionCalls(input: CallSearchInput): Promise<CallSearch> {
+  const response = await apiSend<{ data: { search: CallSearch } }>(
+    "POST",
+    "/api/production/calls/search",
+    {
+      record_ids: input.recordIds,
+      from: input.from || undefined,
+      to: input.to || undefined,
+      providers: input.providers && input.providers.length > 0 ? input.providers : undefined,
+      retrieve_recordings: Boolean(input.retrieveRecordings),
+    },
+  );
+  return response.data.search;
+}
+
+/** Statut par fournisseur et par ligne, sans payload fournisseur brut. */
+export async function getCallSearch(
+  id: number,
+): Promise<{ search: CallSearch; items: CallSearchItem[] }> {
+  const response = await apiGet<{
+    data: { search: CallSearch; items: CallSearchItem[] };
+  }>(`/api/production/calls/searches/${id}`);
+  return response.data;
+}
+
+/** Appels stockés pour les lignes d'une recherche. */
+export async function listCallSearchCalls(
+  id: number,
+  page = 1,
+  pageSize = 100,
+): Promise<Paginated<CallRecord>> {
+  const response = await apiGet<{ data: CallRecord[]; meta: PageMeta }>(
+    `/api/production/calls/searches/${id}/calls`,
+    { page, per_page: pageSize },
+  );
+  return toPaginated(response);
+}
+
+/** Récupère un enregistrement Issabel vers le stockage privé (asynchrone). */
+export async function retrieveCallRecording(callId: number): Promise<string> {
+  const response = await apiSend<{ data: { state: string } }>(
+    "POST",
+    `/api/calls/${callId}/recording/retrieve`,
+  );
+  return response.data.state;
 }
 
 /* -------------------------------------------------------------- démos héritées (mock) */

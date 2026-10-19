@@ -11,6 +11,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { EmptyState } from "@/components/EmptyState";
 import { useData } from "@/hooks/useData";
 import { useAuth } from "@/hooks/useAuth";
+import { CallVerificationPanel } from "@/components/telephony/CallVerificationPanel";
 import * as api from "@/services";
 import { ApiError } from "@/services/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -21,7 +22,7 @@ import {
 } from "@/types/production";
 
 /**
- * Phase 1 — Table de production.
+ * Phase 1 / Phase 2 — Table de production.
  *
  * Les lignes proviennent de la synchronisation Google Sheets (contrat, client,
  * ville, produit, statut). Le numéro de téléphone, lui, est saisi ici et n'est
@@ -31,8 +32,9 @@ import {
  * changement de page, de filtre, de tri ou de recherche l'efface
  * explicitement — aucune sélection « fantôme » n'est soumise.
  *
- * Aucune vérification d'appels n'est implémentée en Phase 1 : le bouton
- * correspondant est volontairement désactivé et étiqueté comme tel.
+ * Phase 2 : « Vérifier les appels » ouvre un panneau qui lance une recherche
+ * asynchrone. Les échecs, capacités non prises en charge et vrais « aucun
+ * appel » y restent distincts ; aucun résultat ne vaut validation de contrat.
  */
 
 const SORT_OPTIONS = [
@@ -70,6 +72,7 @@ export default function ProductionPage() {
 
   const [selected, setSelected] = useState<Record<number, ProductionRecord>>({});
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [verificationOpen, setVerificationOpen] = useState(false);
 
   const [sortBy, sortDirection] = sort.split(":");
 
@@ -120,6 +123,7 @@ export default function ProductionPage() {
 
   function toggleRow(record: ProductionRecord) {
     setSelectionNotice(null);
+    setVerificationOpen(false);
     setSelected((current) => {
       const next = { ...current };
       if (next[record.id]) delete next[record.id];
@@ -264,22 +268,29 @@ export default function ProductionPage() {
               onClick={() => {
                 setSelected({});
                 setSelectionNotice(null);
+                setVerificationOpen(false);
               }}
               className="rounded border border-outline-variant bg-surface-lowest px-md py-1.5 text-body-compact text-on-surface hover:bg-surface-low transition-colors"
             >
               Effacer la sélection
             </button>
-            {/* Phase 2 : la vérification d'appels n'existe pas encore. */}
             <button
               type="button"
-              disabled
-              title="Disponible en Phase 2 — la vérification des appels n'est pas implémentée."
-              className="cursor-not-allowed rounded bg-surface-high px-md py-1.5 text-body-compact text-on-surface-variant disabled:opacity-60"
+              onClick={() => setVerificationOpen(true)}
+              className="rounded bg-primary px-md py-1.5 text-body-compact font-medium text-on-primary hover:bg-primary-container transition-colors"
             >
-              Vérifier les appels (Phase 2)
+              Vérifier les appels
             </button>
           </div>
         </div>
+      ) : null}
+
+      {verificationOpen && selectedIds.length > 0 ? (
+        <CallVerificationPanel
+          key={selectedIds.join("-")}
+          records={Object.values(selected)}
+          onClose={() => setVerificationOpen(false)}
+        />
       ) : null}
 
       {showSkeleton ? (

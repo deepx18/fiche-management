@@ -84,6 +84,32 @@ return [
             ]) : [],
         ],
 
+        /*
+        |------------------------------------------------------------------
+        | Phase 2 — base CDR Issabel (lecture seule)
+        |------------------------------------------------------------------
+        | Connexion séparée pour ne jamais mélanger la base applicative et
+        | asteriskcdrdb. Utiliser un compte MySQL restreint à SELECT.
+        */
+        'issabel' => [
+            'driver' => 'mysql',
+            'host' => env('ISSABEL_DB_HOST', '127.0.0.1'),
+            'port' => env('ISSABEL_DB_PORT', '3306'),
+            'database' => env('ISSABEL_DB_DATABASE', 'asteriskcdrdb'),
+            'username' => env('ISSABEL_DB_USERNAME'),
+            'password' => env('ISSABEL_DB_PASSWORD'),
+            'unix_socket' => env('ISSABEL_DB_SOCKET', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                PDO::ATTR_TIMEOUT => (int) env('ISSABEL_CDR_TIMEOUT', 10),
+            ]) : [],
+        ],
+
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DB_URL'),

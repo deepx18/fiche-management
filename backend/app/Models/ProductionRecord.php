@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Ligne « Production » synchronisée depuis Google Sheets.
@@ -50,5 +51,11 @@ class ProductionRecord extends Model
             'last_synced_at' => 'datetime',
             'source_row' => 'integer',
         ];
+    }
+
+    /** Appels fournisseurs associés (Phase 2). */
+    public function calls(): HasMany
+    {
+        return $this->hasMany(CallRecord::class);
     }
 }
