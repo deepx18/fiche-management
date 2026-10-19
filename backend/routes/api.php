@@ -9,6 +9,7 @@ use App\Http\Controllers\DuplicateController;
 use App\Http\Controllers\ExtractionController;
 use App\Http\Controllers\ImportHistoryController;
 use App\Http\Controllers\ImportedFileController;
+use App\Http\Controllers\ProductionController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -56,6 +57,13 @@ Route::middleware('auth:sanctum')->group(function () {
         // Recherche globale de contacts (toutes fiches) + export filtré.
         Route::get('/contact-search', [ContactSearchController::class, 'index']);
         Route::get('/contact-search/export', [ContactSearchController::class, 'export']);
+
+        // Production (Phase 1) : table synchronisée depuis Google Sheets,
+        // lancement de la synchronisation et numéros clients (saisie locale).
+        Route::get('/production', [ProductionController::class, 'index']);
+        Route::get('/production/syncs', [ProductionController::class, 'syncs']);
+        Route::post('/production/sync', [ProductionController::class, 'sync']);
+        Route::patch('/production/{record}/phone', [ProductionController::class, 'updatePhone'])->whereNumber('record');
 
         // Historique d'import.
         Route::get('/import-history', [ImportHistoryController::class, 'index']);

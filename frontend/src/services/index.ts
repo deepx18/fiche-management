@@ -24,6 +24,11 @@ import type {
   ImportHistoryEntry,
   ImportedFile,
 } from "@/types/contact";
+import type {
+  ProductionFilterOptions,
+  ProductionRecord,
+  ProductionSyncSummary,
+} from "@/types/production";
 import * as mock from "@/data/mock";
 import {
   ApiError,
@@ -517,6 +522,79 @@ export async function archiveFile(id: number): Promise<void> {
   await apiSend("DELETE", `/api/files/${id}`);
 }
 
+/* ------------------------------------------------------ production (Phase 1) */
+
+export interface ProductionFilters {
+  search?: string;
+  city?: string;
+  product?: string;
+  status?: string;
+  hasPhone?: "all" | "yes" | "no";
+  sortBy?: string;
+  sortDirection?: SortDirection;
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * Lignes de production synchronisées, plus l'état de la dernière
+ * synchronisation et les valeurs de filtre réellement disponibles.
+ */
+export interface ProductionPage extends Paginated<ProductionRecord> {
+  lastSync: ProductionSyncSummary | null;
+  filters: ProductionFilterOptions;
+}
+
+export async function listProduction(filters: ProductionFilters = {}): Promise<ProductionPage> {
+  const response = await apiGet<{
+    data: ProductionRecord[];
+    meta: PageMeta;
+    last_sync: ProductionSyncSummary | null;
+    filters: ProductionFilterOptions;
+  }>("/api/production", {
+    search: filters.search || undefined,
+    city: filters.city || undefined,
+    product: filters.product || undefined,
+    status: filters.status || undefined,
+    has_phone: filters.hasPhone && filters.hasPhone !== "all" ? filters.hasPhone : undefined,
+    sort_by: filters.sortBy,
+    sort_direction: filters.sortDirection,
+    page: filters.page,
+    per_page: filters.pageSize,
+  });
+
+  return {
+    ...toPaginated(response),
+    lastSync: response.last_sync,
+    filters: response.filters ?? { cities: [], products: [], statuses: [] },
+  };
+}
+
+/** Lance une synchronisation Google Sheets (idempotente) et renvoie son résumé. */
+export async function syncProduction(): Promise<ProductionSyncSummary> {
+  const response = await apiSend<{ data: { sync: ProductionSyncSummary } }>(
+    "POST",
+    "/api/production/sync",
+  );
+  return response.data.sync;
+}
+
+/** Historique court des synchronisations (succès et échecs), du plus récent au plus ancien. */
+export async function listProductionSyncs(limit = 10): Promise<ProductionSyncSummary[]> {
+  const response = await apiGet<{ data: ProductionSyncSummary[] }>("/api/production/syncs", { limit });
+  return response.data;
+}
+
+/** Ajout / modification du numéro client (champ possédé par l'application). */
+export async function updateProductionPhone(id: number, phone: string): Promise<ProductionRecord> {
+  const response = await apiSend<{ data: ProductionRecord }>(
+    "PATCH",
+    `/api/production/${id}/phone`,
+    { phone },
+  );
+  return response.data;
+}
+
 /* -------------------------------------------------------------- démos héritées (mock) */
 
 export interface ContractFilters {
@@ -552,11 +630,6 @@ export async function listContracts(filters: ContractFilters = {}): Promise<Pagi
   const total = rows.length;
   const start = (page - 1) * pageSize;
   return { data: rows.slice(start, start + pageSize), total, page, pageSize };
-}
-
-export async function getContract(id: number): Promise<Contract | null> {
-  await delay();
-  return mock.contracts.find((c) => c.id === id) ?? null;
 }
 
 export async function listAgents(): Promise<Agent[]> {

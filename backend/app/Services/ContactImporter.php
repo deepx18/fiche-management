@@ -7,6 +7,7 @@ use App\Models\ImportHistory;
 use App\Models\ImportedFile;
 use App\Models\User;
 use App\Support\PhoneNormalizer;
+use App\Support\TextNormalizer;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -249,13 +250,7 @@ class ContactImporter
      */
     public static function normalizeHeader(string $header): string
     {
-        $value = mb_strtolower(trim($header));
-        $trans = \Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
-        if ($trans !== null) {
-            $value = $trans->transliterate($value) ?: $value;
-        }
-
-        return preg_replace('/\s+/u', ' ', $value) ?? $value;
+        return TextNormalizer::header($header);
     }
 
     /**
