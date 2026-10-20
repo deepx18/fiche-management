@@ -11,9 +11,10 @@ use App\Services\Production\ProductionSynchronizer;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 /**
- * Phase 1 — Table « Production ».
+ * Table « Production ».
  *
  *  - `index`  : liste filtrée/triée/paginée des lignes synchronisées, avec la
  *    dernière synchronisation et les valeurs de filtre réellement présentes ;
@@ -22,14 +23,40 @@ use Illuminate\Http\Request;
  *  - `updatePhone` : ajout/modification du numéro client (champ possédé par
  *    l'application, jamais écrasé par la synchronisation).
  *
+ * L'API expose les noms canoniques de la feuille (`nom`, `prenom`,
+ * `prime_annuelle`, `produit`) tandis que les colonnes physiques historiques
+ * (`client_name`, `first_name`, `premium_annual`, `product`) restent la
+ * compatibilité de la base et de la téléphonie. Le mapping unique se trouve
+ * dans App\Models\ProductionRecord::SHEET_FIELDS.
+ *
  * Le classeur et la plage ne sont jamais fournis par le client : ils viennent
  * exclusivement de la configuration serveur (config/production.php).
  */
 class ProductionController extends Controller
 {
-    /** Colonnes triables autorisées pour la table de production. */
+    /** Champ d'API triable → colonne physique. */
     private const SORTABLE = [
-        'id', 'contract_reference', 'client_name', 'phone', 'city', 'product', 'status', 'last_synced_at',
+        'id' => 'id',
+        'reference_contrat' => 'reference_contrat',
+        'date' => 'date',
+        'cial' => 'cial',
+        'nom' => 'client_name',
+        'prenom' => 'first_name',
+        'cie' => 'cie',
+        'produit' => 'product',
+        'date_effet' => 'date_effet',
+        'validation' => 'validation',
+        'type_signature' => 'type_signature',
+        'last_synced_at' => 'last_synced_at',
+        'phone' => 'phone',
+    ];
+
+    /** Filtre d'API → colonne physique. */
+    private const FILTERABLE = [
+        'cie' => 'cie',
+        'produit' => 'product',
+        'validation' => 'validation',
+        'type_signature' => 'type_signature',
     ];
 
     private const FILTER_OPTIONS_LIMIT = 200;
@@ -38,8 +65,12 @@ class ProductionController extends Controller
     {
         $request->validate([
             'has_phone' => ['nullable', 'in:all,yes,no'],
-            'sort_by' => ['nullable', 'in:'.implode(',', self::SORTABLE)],
+            'sort_by' => ['nullable', Rule::in(array_keys(self::SORTABLE))],
             'sort_direction' => ['nullable', 'in:asc,desc'],
+            'cie' => ['nullable', 'string', 'max:190'],
+            'produit' => ['nullable', 'string', 'max:190'],
+            'validation' => ['nullable', 'string', 'max:190'],
+            'type_signature' => ['nullable', 'string', 'max:300'],
         ]);
 
         $query = ProductionRecord::query();
@@ -48,8 +79,13 @@ class ProductionController extends Controller
             $like = '%'.$this->escapeLike($search).'%';
             $normalizedPhone = PhoneNormalizer::normalize($search);
             $query->where(function ($q) use ($like, $normalizedPhone) {
-                $q->where('contract_reference', 'like', $like)
+                $q->where('reference_contrat', 'like', $like)
                     ->orWhere('client_name', 'like', $like)
+                    ->orWhere('first_name', 'like', $like)
+                    ->orWhere('cial', 'like', $like)
+                    ->orWhere('cie', 'like', $like)
+                    ->orWhere('product', 'like', $like)
+                    ->orWhere('validation', 'like', $like)
                     ->orWhere('phone', 'like', $like);
                 if ($normalizedPhone !== null) {
                     $q->orWhere('phone_normalise', 'like', '%'.$normalizedPhone.'%');
@@ -57,10 +93,10 @@ class ProductionController extends Controller
             });
         }
 
-        foreach (['city', 'product', 'status'] as $field) {
-            $value = trim((string) $request->query($field));
+        foreach (self::FILTERABLE as $parameter => $column) {
+            $value = trim((string) $request->query($parameter));
             if ($value !== '') {
-                $query->where($field, $value);
+                $query->where($column, $value);
             }
         }
 
@@ -71,15 +107,13 @@ class ProductionController extends Controller
         };
 
         $sortBy = (string) $request->query('sort_by', 'id');
-        if (! in_array($sortBy, self::SORTABLE, true)) {
-            $sortBy = 'id';
-        }
+        $column = self::SORTABLE[$sortBy] ?? 'id';
         $direction = (string) $request->query('sort_direction', 'asc');
         if (! in_array($direction, ['asc', 'desc'], true)) {
             $direction = 'asc';
         }
-        $query->orderBy($sortBy, $direction);
-        if ($sortBy !== 'id') {
+        $query->orderBy($column, $direction);
+        if ($column !== 'id') {
             $query->orderBy('id');
         }
 
@@ -99,9 +133,10 @@ class ProductionController extends Controller
                 ProductionSync::query()->with('user')->latest('id')->first()
             ),
             'filters' => [
-                'cities' => $this->distinctValues('city'),
-                'products' => $this->distinctValues('product'),
-                'statuses' => $this->distinctValues('status'),
+                'cies' => $this->distinctValues('cie'),
+                'produits' => $this->distinctValues('product'),
+                'validations' => $this->distinctValues('validation'),
+                'type_signatures' => $this->distinctValues('type_signature'),
             ],
         ]);
     }
@@ -174,13 +209,19 @@ class ProductionController extends Controller
     {
         return [
             'id' => $record->id,
-            'contract_reference' => $record->contract_reference,
-            'client_name' => $record->client_name,
+            'reference_contrat' => $record->reference_contrat,
+            'date' => $record->date?->toDateString(),
+            'cial' => $record->cial,
+            'nom' => $record->client_name,
+            'prenom' => $record->first_name,
+            'cotisation' => $record->cotisation,
+            'prime_annuelle' => $record->premium_annual,
+            'cie' => $record->cie,
+            'produit' => $record->product,
+            'date_effet' => $record->date_effet?->toDateString(),
+            'validation' => $record->validation,
+            'type_signature' => $record->type_signature,
             'phone' => $record->phone,
-            'city' => $record->city,
-            'product' => $record->product,
-            'status' => $record->status,
-            'source_row' => $record->source_row,
             'last_synced_at' => $record->last_synced_at?->toISOString(),
             'updated_at' => $record->updated_at?->toISOString(),
         ];
@@ -201,6 +242,7 @@ class ProductionController extends Controller
             'skipped_count' => $sync->skipped_count,
             'failed_count' => $sync->failed_count,
             'error_summary' => $sync->error_summary,
+            'warnings' => $sync->warnings,
             'row_errors' => $sync->row_errors,
             'performed_by' => $sync->relationLoaded('user') ? $sync->user?->name : null,
             'started_at' => $sync->started_at?->toISOString(),

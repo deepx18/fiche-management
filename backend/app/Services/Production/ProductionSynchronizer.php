@@ -7,7 +7,6 @@ use App\Models\ProductionSync;
 use App\Models\User;
 use App\Services\Google\GoogleSheetsException;
 use App\Services\Google\SheetsReader;
-use App\Support\TextNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -16,39 +15,41 @@ use Throwable;
  * Synchronisation Google Sheets → production_records.
  *
  * Garanties :
- *  - **idempotence** : l'identité d'une ligne est `source_key`, le SHA-256 de
- *    la clé métier normalisée (config `production.identity`). Rejouer la même
- *    feuille met à jour les lignes existantes au lieu d'en créer des doublons ;
- *  - **possession des champs** : seuls les champs possédés par la feuille
- *    (ProductionRecord::SPREADSHEET_FIELDS) sont écrits. Le numéro de téléphone
- *    saisi dans l'application n'est jamais touché ;
- *  - **non destructif** : une ligne absente d'une réponse n'est jamais
- *    supprimée (aucune politique de suppression de source en Phase 1) ;
+ *  - **mapping vérifié** : les 11 en-têtes réels doivent être présents, une
+ *    seule fois chacun. Un en-tête manquant ou dupliqué interrompt la
+ *    synchronisation avant toute écriture. Les colonnes inconnues sont
+ *    signalées, jamais devinées ;
+ *  - **idempotence** : l'identité est `source_key`, SHA-256 d'une clé métier de
+ *    7 champs (date, cial, nom, prénom, CIE, produit, date d'effet). Rejouer la
+ *    même feuille met à jour les lignes existantes ; le numéro de ligne n'est
+ *    jamais une identité ;
+ *  - **possession des champs** : seuls les 11 champs de la feuille sont écrits.
+ *    Le téléphone saisi dans l'application et `reference_contrat` ne sont
+ *    jamais touchés ;
+ *  - **non destructif** : aucune ligne absente de la réponse n'est supprimée ;
+ *    une lecture tronquée est signalée « partielle », jamais présentée comme
+ *    un succès complet ;
  *  - **traçable** : chaque tentative crée un ProductionSync (succès comme
- *    échec) avec un résumé chiffré et des erreurs par ligne, sans données
+ *    échec) avec compteurs, avertissements et erreurs par ligne, sans données
  *    personnelles ni secrets.
  *
- * Les en-têtes sont reconnus via la correspondance explicite
- * `config('production.mapping')`. Si un champ obligatoire n'a pas d'en-tête
- * correspondant, la synchronisation est refusée (ProductionMappingException)
- * au lieu de deviner une colonne.
+ * L'appel réseau est effectué AVANT la transaction : aucune transaction base
+ * n'est maintenue ouverte pendant l'attente de Google.
  */
 class ProductionSynchronizer
 {
-    /** Longueurs maximales acceptées par champ (alignées sur le schéma). */
-    private const MAX_LENGTH = [
-        'contract_reference' => 120,
-        'client_name' => 190,
-        'city' => 120,
-        'product' => 190,
-        'status' => 60,
-    ];
-
     private const CHUNK_SIZE = 500;
 
     private const MAX_ROW_ERRORS = 250;
 
-    public function __construct(private readonly SheetsReader $reader) {}
+    private const MAX_WARNINGS = 25;
+
+    private ProductionSheetSchema $schema;
+
+    public function __construct(private readonly SheetsReader $reader)
+    {
+        $this->schema = new ProductionSheetSchema;
+    }
 
     public function sync(?User $user = null): ProductionSync
     {
@@ -82,22 +83,31 @@ class ProductionSynchronizer
      */
     private function apply(ProductionSync $sync, array $rows): ProductionSync
     {
-        $mapping = $this->mapping();
-        $identityFields = $this->identity();
-        $requiredFields = $this->required();
-
         $headerIndex = $this->locateHeaderRow($rows);
-        $headerMap = $headerIndex === null ? [] : $this->mapHeaderRow($rows[$headerIndex]);
-
-        $missing = array_values(array_filter(
-            $requiredFields,
-            static fn (string $field): bool => ! isset($headerMap[$field]),
-        ));
-        if ($missing !== []) {
-            throw ProductionMappingException::missingHeaders($missing);
+        if ($headerIndex === null) {
+            throw ProductionMappingException::headerRowNotFound();
         }
 
-        $dataRows = $headerIndex === null ? [] : array_slice($rows, $headerIndex + 1, null, true);
+        $resolution = $this->schema->resolveHeaderRow($rows[$headerIndex]);
+        if ($resolution['missing'] !== [] || $resolution['duplicates'] !== []) {
+            throw ProductionMappingException::invalidHeaders($resolution['missing'], $resolution['duplicates']);
+        }
+
+        $headerMap = $resolution['map'];
+        $dataRows = array_slice($rows, $headerIndex + 1, null, true);
+
+        $warnings = [];
+        $this->collectColumnWarnings($rows[$headerIndex], $dataRows, $headerMap, $resolution['unrecognized'], $warnings);
+
+        $truncated = $this->isFetchedRangeTruncated(count($rows));
+        if ($truncated) {
+            $warnings[] = 'La feuille contient au moins autant de lignes que la plage configurée '
+                .'GOOGLE_SHEETS_RANGE ('.(string) config('production.range')
+                .') : la lecture peut être incomplète. Aucune ligne locale n\'a été supprimée.';
+        }
+
+        $identityFields = $this->identity();
+        $requiredFields = $this->required();
 
         $skipped = 0;
         $rowErrors = [];
@@ -107,18 +117,19 @@ class ProductionSynchronizer
         foreach ($dataRows as $index => $row) {
             $sheetRow = (int) $index + 1; // numéro de ligne 1-indexé (informatif)
 
-            if ($this->isEmptyRow($row)) {
+            $raw = [];
+            foreach (array_keys(ProductionRecord::SHEET_FIELDS) as $field) {
+                $raw[$field] = $this->schema->cleanText($this->cell($row, $headerMap[$field] ?? null));
+            }
+
+            if (array_filter($raw, static fn (?string $value): bool => $value !== null) === []) {
                 $skipped++;
 
                 continue;
             }
 
-            $values = [];
-            foreach (ProductionRecord::SPREADSHEET_FIELDS as $field) {
-                $values[$field] = $this->cell($row, $headerMap[$field] ?? null);
-            }
+            [$values, $errors] = $this->parseRow($sheetRow, $raw, $requiredFields);
 
-            $errors = $this->validateRow($sheetRow, $values, $requiredFields);
             if ($errors !== []) {
                 array_push($rowErrors, ...$errors);
 
@@ -129,8 +140,8 @@ class ProductionSynchronizer
             if (isset($seenKeys[$key])) {
                 $rowErrors[] = [
                     'row' => $sheetRow,
-                    'field' => implode(' + ', array_map('mb_strtoupper', $identityFields)),
-                    'reason' => 'Clé métier identique à la ligne '.$seenKeys[$key].' de la feuille.',
+                    'field' => 'IDENTITÉ',
+                    'reason' => 'Ligne identique à la ligne '.$seenKeys[$key].' de la feuille (même date, CIAL, nom, prénom, CIE, produit et date d\'effet).',
                 ];
 
                 continue;
@@ -147,6 +158,7 @@ class ProductionSynchronizer
             foreach (array_chunk($valid, self::CHUNK_SIZE) as $chunk) {
                 $existing = ProductionRecord::query()
                     ->whereIn('source_key', array_column($chunk, 'key'))
+                    ->lockForUpdate()
                     ->get()
                     ->keyBy('source_key');
 
@@ -155,12 +167,13 @@ class ProductionSynchronizer
                     $record = $existing->get($item['key']);
 
                     if ($record !== null) {
-                        // Mise à jour des seuls champs possédés par la feuille :
-                        // `phone` et `phone_normalise` ne sont pas dans $attributes.
+                        // Seuls les champs de la feuille sont écrits : `phone`,
+                        // `phone_normalise` et `reference_contrat` sont absents
+                        // de $attributes.
                         $record->update($attributes);
                         $updated++;
                     } else {
-                        ProductionRecord::create($attributes + ['source_key' => $item['key']]);
+                        ProductionRecord::createWithReference($attributes + ['source_key' => $item['key']]);
                         $created++;
                     }
                 }
@@ -170,7 +183,7 @@ class ProductionSynchronizer
         $failed = count(array_unique(array_column($rowErrors, 'row')));
         $rowsRead = count($dataRows);
 
-        [$status, $summary] = $this->summarize($rowsRead, $created, $updated, $skipped, $failed, $rowErrors);
+        [$status, $summary] = $this->summarize($rowsRead, $created, $updated, $skipped, $failed, $rowErrors, $truncated);
 
         $sync->update([
             'status' => $status,
@@ -180,6 +193,7 @@ class ProductionSynchronizer
             'skipped_count' => $skipped,
             'failed_count' => $failed,
             'error_summary' => $summary,
+            'warnings' => $warnings === [] ? null : array_slice($warnings, 0, self::MAX_WARNINGS),
             'row_errors' => $rowErrors === [] ? null : array_slice($rowErrors, 0, self::MAX_ROW_ERRORS),
             'completed_at' => now(),
         ]);
@@ -192,14 +206,130 @@ class ProductionSynchronizer
             'updated' => $updated,
             'skipped' => $skipped,
             'failed' => $failed,
+            'warnings' => count($warnings),
         ]);
 
         return $sync->refresh();
     }
 
-    /** @return array{0: string, 1: string} statut + résumé lisible */
-    private function summarize(int $rowsRead, int $created, int $updated, int $skipped, int $failed, array $rowErrors): array
+    /**
+     * @param  array<string, string|null>  $raw
+     * @param  list<string>  $requiredFields
+     * @return array{0: array<string, string|null>, 1: list<array{row:int, field:string, reason:string}>}
+     */
+    private function parseRow(int $sheetRow, array $raw, array $requiredFields): array
     {
+        $values = $raw;
+        $errors = [];
+
+        foreach ($requiredFields as $field) {
+            if (($raw[$field] ?? null) === null) {
+                $errors[] = $this->error($sheetRow, $field, 'Champ obligatoire vide.');
+            }
+        }
+
+        foreach (ProductionRecord::SHEET_FIELDS as $field => $column) {
+            $value = $raw[$field] ?? null;
+            $max = ProductionSheetSchema::MAX_LENGTH[$field] ?? null;
+
+            if ($value !== null && $max !== null && mb_strlen($value) > $max) {
+                $errors[] = $this->error($sheetRow, $field, ProductionValueException::tooLong($max)->getMessage());
+            }
+        }
+
+        foreach (['date', 'date_effet'] as $field) {
+            if ($raw[$field] === null) {
+                continue; // déjà signalé comme obligatoire
+            }
+            try {
+                $values[$field] = $this->schema->parseDate($raw[$field]);
+            } catch (ProductionValueException $e) {
+                $errors[] = $this->error($sheetRow, $field, $e->getMessage());
+            }
+        }
+
+        foreach (['cotisation', 'prime_annuelle'] as $field) {
+            if ($raw[$field] === null) {
+                $values[$field] = null;
+
+                continue;
+            }
+            try {
+                $values[$field] = $this->schema->parseAmount($raw[$field]);
+            } catch (ProductionValueException $e) {
+                $errors[] = $this->error($sheetRow, $field, $e->getMessage());
+            }
+        }
+
+        return [$values, $errors];
+    }
+
+    /**
+     * @return array{row:int, field:string, reason:string}
+     */
+    private function error(int $sheetRow, string $field, string $reason): array
+    {
+        return [
+            'row' => $sheetRow,
+            'field' => ProductionSheetSchema::FIELD_LABELS[$field] ?? mb_strtoupper($field),
+            'reason' => $reason,
+        ];
+    }
+
+    /**
+     * Signale les colonnes que l'application n'utilise pas.
+     *
+     * @param  list<string|null>  $headerRow
+     * @param  iterable<int, list<string|null>>  $dataRows
+     * @param  array<string, int>  $headerMap
+     * @param  list<string>  $unrecognized
+     * @param  list<string>  $warnings
+     */
+    private function collectColumnWarnings(
+        array $headerRow,
+        iterable $dataRows,
+        array $headerMap,
+        array $unrecognized,
+        array &$warnings,
+    ): void {
+        if ($unrecognized !== []) {
+            $warnings[] = 'Colonne(s) non reconnue(s) ignorée(s) : '.implode(', ', $unrecognized)
+                .'. Aucune valeur de ces colonnes n\'est importée.';
+        }
+
+        $mappedIndexes = array_values($headerMap);
+        $anonymousPopulated = [];
+
+        foreach ($dataRows as $row) {
+            foreach ($row as $index => $cell) {
+                if (in_array((int) $index, $mappedIndexes, true)) {
+                    continue;
+                }
+                if ($this->schema->cleanText($cell) !== null) {
+                    $anonymousPopulated[(int) $index] = true;
+                }
+            }
+        }
+
+        foreach (array_keys($anonymousPopulated) as $index) {
+            $label = $this->schema->cleanText($headerRow[$index] ?? null);
+            if ($label !== null && in_array($label, $unrecognized, true)) {
+                continue; // déjà signalée
+            }
+            $warnings[] = 'Colonne sans en-tête reconnu (position '.($index + 1).') contenant des données ignorée.';
+        }
+    }
+
+    /** @return array{0: string, 1: string} statut + résumé lisible */
+    private function summarize(
+        int $rowsRead,
+        int $created,
+        int $updated,
+        int $skipped,
+        int $failed,
+        array $rowErrors,
+        bool $truncated,
+    ): array {
         $parts = [];
 
         if ($created + $updated === 0) {
@@ -207,14 +337,22 @@ class ProductionSynchronizer
             $parts[] = $rowsRead === 0
                 ? 'La plage configurée ne contient aucune ligne de données.'
                 : 'Aucune ligne exploitable : toutes les lignes lues sont vides ou invalides.';
-        } elseif ($failed > 0) {
+        } elseif ($truncated || $failed > 0) {
             $status = ProductionSync::STATUS_PARTIAL;
-            $parts[] = $failed.' ligne(s) rejetée(s) (détail ci-dessous).';
+            $parts[] = $truncated
+                ? 'Synchronisation partielle : lecture potentiellement tronquée.'
+                : $failed.' ligne(s) rejetée(s) (détail ci-dessous).';
         } else {
             $status = ProductionSync::STATUS_COMPLETED;
             $parts[] = 'Synchronisation terminée sans erreur.';
         }
 
+        if ($truncated) {
+            $parts[] = 'La plage configurée a été atteinte : augmentez GOOGLE_SHEETS_RANGE pour lire toute la feuille.';
+        }
+        if ($failed > 0) {
+            $parts[] = $failed.' ligne(s) rejetée(s), aucune n\'a été écrite.';
+        }
         if ($skipped > 0) {
             $parts[] = $skipped.' ligne(s) vide(s) ignorée(s).';
         }
@@ -222,7 +360,7 @@ class ProductionSynchronizer
             $parts[] = 'Seules les '.self::MAX_ROW_ERRORS.' premières erreurs de ligne sont conservées.';
         }
 
-        return [$status, implode(' ', $parts)];
+        return [$status, implode(' ', array_unique($parts))];
     }
 
     private function markFailed(ProductionSync $sync, string $message): void
@@ -241,66 +379,21 @@ class ProductionSynchronizer
 
     /**
      * @param  array<string, string|null>  $values
-     * @param  list<string>  $requiredFields
-     * @return list<array{row:int, field:string, reason:string}>
-     */
-    private function validateRow(int $sheetRow, array $values, array $requiredFields): array
-    {
-        $errors = [];
-
-        foreach (ProductionRecord::SPREADSHEET_FIELDS as $field) {
-            $value = $values[$field] ?? null;
-            if ($value === null) {
-                continue;
-            }
-            $max = self::MAX_LENGTH[$field] ?? 255;
-            if (mb_strlen($value) > $max) {
-                $errors[] = [
-                    'row' => $sheetRow,
-                    'field' => mb_strtoupper($field),
-                    'reason' => 'Valeur trop longue ('.$max.' caractères maximum).',
-                ];
-            }
-        }
-
-        foreach ($requiredFields as $field) {
-            if (($values[$field] ?? null) === null) {
-                $errors[] = [
-                    'row' => $sheetRow,
-                    'field' => mb_strtoupper($field),
-                    'reason' => 'Champ obligatoire vide.',
-                ];
-            }
-        }
-
-        return $errors;
-    }
-
-    /**
-     * @param  array<string, string|null>  $values
      * @param  list<string>  $identityFields
      */
     private function sourceKey(array $values, array $identityFields): string
     {
         $parts = [];
         foreach ($identityFields as $field) {
-            $parts[] = $this->normalizeIdentityValue($values[$field] ?? null);
+            $parts[] = $this->schema->identityValue($field, $values[$field] ?? null);
         }
 
         return hash('sha256', implode("\x1f", $parts));
     }
 
-    /** Normalisation de la clé métier : espaces réduits, casse unifiée. */
-    private function normalizeIdentityValue(?string $value): string
-    {
-        $value = trim((string) $value);
-        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
-
-        return mb_strtolower($value, 'UTF-8');
-    }
-
     /**
-     * Champs mis à jour par la synchronisation — jamais `phone`.
+     * Champs mis à jour par la synchronisation — jamais `phone`, jamais
+     * `reference_contrat`.
      *
      * @param  array<string, string|null>  $values
      * @return array<string, string|int|null>
@@ -308,8 +401,8 @@ class ProductionSynchronizer
     private function spreadsheetAttributes(array $values, int $sheetRow): array
     {
         $attributes = [];
-        foreach (ProductionRecord::SPREADSHEET_FIELDS as $field) {
-            $attributes[$field] = $values[$field] ?? null;
+        foreach (ProductionRecord::SHEET_FIELDS as $field => $column) {
+            $attributes[$column] = $values[$field] ?? null;
         }
         $attributes['source_row'] = $sheetRow;
         $attributes['last_synced_at'] = now();
@@ -318,33 +411,13 @@ class ProductionSynchronizer
     }
 
     /** @param list<string|null> $row */
-    private function isEmptyRow(array $row): bool
-    {
-        foreach ($row as $cell) {
-            if ($cell === null) {
-                continue;
-            }
-            if (trim((string) $cell) !== '') {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /** @param list<string|null> $row */
     private function cell(array $row, ?int $index): ?string
     {
         if ($index === null || ! array_key_exists($index, $row)) {
             return null;
         }
-        $value = $row[$index];
-        if ($value === null) {
-            return null;
-        }
-        $string = trim((string) $value);
 
-        return $string === '' ? null : $string;
+        return $row[$index];
     }
 
     /** @param list<list<string|null>> $rows */
@@ -354,7 +427,7 @@ class ProductionSynchronizer
         $count = count($rows);
 
         for ($i = $start; $i < $count; $i++) {
-            if (! $this->isEmptyRow($rows[$i])) {
+            if (array_filter($rows[$i], static fn (?string $cell): bool => $cell !== null && trim($cell) !== '') !== []) {
                 return $i;
             }
         }
@@ -363,30 +436,22 @@ class ProductionSynchronizer
     }
 
     /**
-     * @param  list<string|null>  $headerRow
-     * @return array<string, int> champ interne → index de colonne
+     * Détecte une lecture bornée par la plage (ex. « A1:Z5000 »).
+     *
+     * Si le nombre de lignes lues atteint la dernière ligne de la plage, la
+     * feuille peut contenir davantage de données : la synchronisation est
+     * marquée partielle plutôt que présentée comme complète.
      */
-    private function mapHeaderRow(array $headerRow): array
+    private function isFetchedRangeTruncated(int $fetchedRows): bool
     {
-        $lookup = [];
-        foreach ($this->mapping() as $field => $aliases) {
-            foreach ((array) $aliases as $alias) {
-                $lookup[TextNormalizer::header((string) $alias)] = $field;
-            }
+        $range = (string) config('production.range', '');
+        if (preg_match('/(?:[A-Za-z0-9_]+!)?[A-Z]+(\d+)(?::[A-Z]+(\d+))?$/', $range, $matches) !== 1) {
+            return false;
         }
 
-        $map = [];
-        foreach ($headerRow as $index => $cell) {
-            if ($cell === null || trim((string) $cell) === '') {
-                continue;
-            }
-            $field = $lookup[TextNormalizer::header((string) $cell)] ?? null;
-            if ($field !== null && ! isset($map[$field])) {
-                $map[$field] = $index;
-            }
-        }
+        $lastRow = (int) ($matches[2] ?? $matches[1]);
 
-        return $map;
+        return $lastRow > 0 && $fetchedRows >= $lastRow;
     }
 
     /** @return array<string, list<string>> */
@@ -416,8 +481,14 @@ class ProductionSynchronizer
         }
 
         foreach (array_keys($mapping) as $field) {
-            if (! in_array($field, ProductionRecord::SPREADSHEET_FIELDS, true)) {
+            if (! array_key_exists($field, ProductionRecord::SHEET_FIELDS)) {
                 throw ProductionMappingException::invalidConfiguration('champ inconnu « '.$field.' » dans production.mapping.');
+            }
+        }
+
+        foreach (array_keys(ProductionRecord::SHEET_FIELDS) as $field) {
+            if (! isset($mapping[$field])) {
+                throw ProductionMappingException::invalidConfiguration('le champ « '.$field.' » doit figurer dans production.mapping.');
             }
         }
 

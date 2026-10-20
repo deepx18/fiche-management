@@ -29,6 +29,7 @@ class ProductionSync extends Model
         'skipped_count',
         'failed_count',
         'error_summary',
+        'warnings',
         'row_errors',
         'started_at',
         'completed_at',
@@ -38,6 +39,7 @@ class ProductionSync extends Model
     {
         return [
             'row_errors' => 'array',
+            'warnings' => 'array',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
             'rows_read' => 'integer',

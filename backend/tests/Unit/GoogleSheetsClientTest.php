@@ -36,6 +36,8 @@ class GoogleSheetsClientTest extends TestCase
             'production.range' => 'Production!A1:E100',
             'production.credentials_path' => $this->writeCredentials(),
             'production.timeout' => 5,
+            'production.retry.attempts' => 1,
+            'production.retry.base_delay_ms' => 0,
         ], $overrides));
     }
 
@@ -167,7 +169,45 @@ class GoogleSheetsClientTest extends TestCase
 
         $expectedPath = '/v4/spreadsheets/'.self::SPREADSHEET.'/values/'.rawurlencode('Production!A1:E100');
         Http::assertSent(fn ($request) => str_contains($request->url(), $expectedPath)
-            && str_contains($request->url(), 'majorDimension=ROWS'));
+            && str_contains($request->url(), 'majorDimension=ROWS')
+            && str_contains($request->url(), 'valueRenderOption=FORMATTED_VALUE'));
+    }
+
+    public function test_transient_server_errors_are_retried_with_a_bounded_attempt_count(): void
+    {
+        $this->configure(['production.retry.attempts' => 3]);
+
+        $sheetStatuses = [500, 503];
+        Http::fake(function ($request) use (&$sheetStatuses) {
+            if (str_contains($request->url(), 'oauth2.googleapis.com')) {
+                return Http::response(['access_token' => 'jeton', 'expires_in' => 3600]);
+            }
+
+            $status = array_shift($sheetStatuses) ?? 200;
+            if ($status === 200) {
+                return Http::response(['values' => [['DATE'], ['01/10/2026']]]);
+            }
+
+            return Http::response(['error' => 'boom'], $status);
+        });
+
+        $rows = (new GoogleSheetsClient)->rows();
+
+        $this->assertSame([['DATE'], ['01/10/2026']], $rows);
+    }
+
+    public function test_quota_errors_are_reported_as_rate_limit(): void
+    {
+        $this->configure();
+        Http::fake([
+            'oauth2.googleapis.com/*' => Http::response(['access_token' => 'jeton', 'expires_in' => 3600]),
+            'sheets.googleapis.com/*' => Http::response(['error' => 'quota'], 429),
+        ]);
+
+        $this->expectException(GoogleSheetsException::class);
+        $this->expectExceptionMessageMatches('/Quota Google Sheets/');
+
+        (new GoogleSheetsClient)->rows();
     }
 
     public function test_an_empty_range_returns_no_rows(): void

@@ -1,23 +1,25 @@
 <?php
 
 /**
- * Phase 1 — Synchronisation « Production » depuis Google Sheets.
+ * Synchronisation « Production » depuis Google Sheets.
  *
- * Rien n'est inventé côté données : la correspondance entre les en-têtes de la
- * feuille et les champs internes de l'application est **explicite** ici. Si la
- * feuille ne contient pas un en-tête correspondant à un champ obligatoire, la
- * synchronisation échoue avec un message actionnable (aucune donnée n'est
- * fabriquée et aucune ligne n'est écrite).
+ * La correspondance entre les en-têtes réels de la feuille et les champs
+ * internes est **explicite** ici. Aucune correspondance approximative n'est
+ * faite : les 11 en-têtes doivent être présents, une seule fois chacun, sinon
+ * la synchronisation est refusée avant toute écriture.
  *
- * Les libellés sont comparés après normalisation : casse, accents et espaces
- * superflus sont ignorés (voir ProductionSynchronizer::normalizeHeader()).
+ * Normalisation des en-têtes (voir App\Services\Production\ProductionSheetSchema) :
+ * casse, accents, espaces multiples, espaces insécables et apostrophes
+ * typographiques sont neutralisés. Aucun alias supplémentaire n'est déclaré,
+ * car les libellés réels ont été vérifiés dans la feuille de production.
  */
 return [
 
     // Identifiant du classeur Google Sheets (présent dans l'URL du document).
     'spreadsheet_id' => env('GOOGLE_SHEETS_SPREADSHEET_ID'),
 
-    // Plage A1 lue en lecture seule, ex. « Production!A1:Z5000 ».
+    // Plage A1 lue en lecture seule, ex. « Production!A1:Z5000 ». La borne de
+    // lignes sert aussi à détecter une lecture tronquée (voir le synchroniseur).
     'range' => env('GOOGLE_SHEETS_RANGE', 'A1:Z5000'),
 
     // Chemin du JSON de compte de service (jamais versionné).
@@ -29,64 +31,77 @@ return [
     // Délai maximum (secondes) des appels HTTP vers Google.
     'timeout' => (int) env('GOOGLE_SHEETS_TIMEOUT', 30),
 
+    // Reprises bornées sur erreurs transitoires (429, 5xx, réseau).
+    'retry' => [
+        'attempts' => (int) env('GOOGLE_SHEETS_RETRY_ATTEMPTS', 3),
+        'base_delay_ms' => (int) env('GOOGLE_SHEETS_RETRY_DELAY_MS', 400),
+    ],
+
     // Portée minimale : lecture seule du classeur.
     'scopes' => ['https://www.googleapis.com/auth/spreadsheets.readonly'],
 
     /*
     |----------------------------------------------------------------------
-    | Correspondance en-têtes de la feuille → champs internes
+    | Correspondance en-têtes de la feuille → champs canoniques
     |----------------------------------------------------------------------
-    | Clé = champ interne (fixé par le schéma de l'application), valeur =
-    | liste des libellés d'en-tête acceptés. Adaptez cette liste aux
-    | en-têtes réellement présents dans votre feuille ; le premier libellé
-    | reconnu gagne, un champ n'est mappé qu'une seule fois.
+    | Clé = champ canonique utilisé par le synchroniseur, l'API et l'interface.
+    | Valeur = libellés acceptés (normalisés). La correspondance physique est
+    | définie dans App\Models\ProductionRecord::SHEET_FIELDS.
     |
-    | Champs « feuille » disponibles :
-    |   contract_reference, client_name, city, product, status
+    | Aucun alias non vérifié n'est ajouté : un libellé inconnu est signalé,
+    | jamais deviné.
     */
     'mapping' => [
-        'contract_reference' => [
-            'n° contrat', 'no contrat', 'numero contrat', 'numéro contrat',
-            'contrat', 'reference', 'référence', 'contract_reference',
-        ],
-        'client_name' => [
-            'client', 'nom client', 'nom du client', 'assure', 'assuré',
-            'client_name',
-        ],
-        'city' => ['ville', 'city'],
-        'product' => ['produit', 'product', 'formule'],
-        'status' => ['statut', 'status', 'etat', 'état'],
+        'date' => ['DATE'],
+        'cial' => ['CIAL'],
+        'nom' => ['NOM'],
+        'prenom' => ['PRENOM'],
+        'cotisation' => ['COTISATION'],
+        'prime_annuelle' => ['PRIME ANNUELLE'],
+        'cie' => ['CIE'],
+        'produit' => ['PRODUIT'],
+        'date_effet' => ["Date d'effet"],
+        'validation' => ['VALIDATION'],
+        'type_signature' => ['TYPE DE SIGNATURE'],
     ],
 
     /*
     |----------------------------------------------------------------------
     | Identité d'une ligne (idempotence)
     |----------------------------------------------------------------------
-    | La clé métier est la concaténation normalisée de ces champs, hachée en
-    | SHA-256 et stockée dans production_records.source_key (unique). Deux
-    | lignes de la feuille partageant la même clé sont considérées comme la
-    | même entité : la seconde écrase la première (mise à jour, jamais de
-    | doublon). Les numéros de ligne ne sont jamais utilisés comme identité.
+    | Aucun identifiant métier unique n'existe dans la feuille (CIAL, nom ou
+    | date ne sont pas garantis uniques). La clé est donc la concaténation
+    | normalisée de 7 champs stables : date, cial, nom, prénom, CIE, produit et
+    | date d'effet. Deux lignes identiques sur ces 7 champs sont la même
+    | entité ; toute différence (y compris un nom corrigé) crée une ligne
+    | distincte plutôt que d'écraser une ligne existante. Les montants, la
+    | validation et le type de signature ne font pas partie de l'identité : ils
+    | peuvent évoluer sans casser l'idempotence.
+    |
+    | Le numéro de ligne de la feuille n'est jamais une identité.
     */
-    'identity' => ['contract_reference', 'client_name'],
+    'identity' => ['date', 'cial', 'nom', 'prenom', 'cie', 'produit', 'date_effet'],
 
     /*
     |----------------------------------------------------------------------
-    | Champs obligatoires
+    | Champs obligatoires par ligne
     |----------------------------------------------------------------------
-    | Une ligne dont un de ces champs est vide est rejetée (comptée en
-    | « failed » avec le champ et le motif), sans interrompre la synchro.
+    | Une ligne dont un de ces champs est vide (ou dont une date est invalide)
+    | est rejetée avec un diagnostic, sans interrompre les autres lignes.
+    | COTISATION, PRIME ANNUELLE, VALIDATION et TYPE DE SIGNATURE peuvent être
+    | vides dans la source ; s'ils sont renseignés, ils doivent être valides.
     */
-    'required' => ['contract_reference', 'client_name'],
+    'required' => ['date', 'cial', 'nom', 'prenom', 'cie', 'produit', 'date_effet'],
 
     /*
     |----------------------------------------------------------------------
-    | Champs possédés par l'application
+    | Possession des champs
     |----------------------------------------------------------------------
-    | `phone` est saisi par les utilisateurs et n'est JAMAIS écrit par la
-    | synchronisation (voir ProductionSynchronizer) : un numéro saisi
-    | manuellement survit à chaque import.
+    | `phone` et `phone_normalise` sont saisis dans l'application : la
+    | synchronisation ne les écrit JAMAIS. `reference_contrat` est générée par
+    | l'application et n'est jamais écrasée par la feuille.
     */
-    'application_owned' => ['phone'],
+    'application_owned' => ['phone', 'phone_normalise'],
+    'generated' => ['reference_contrat'],
 
 ];

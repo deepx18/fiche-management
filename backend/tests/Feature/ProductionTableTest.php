@@ -9,6 +9,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\InteractsWithProductionSheets;
 use Tests\TestCase;
 
+/**
+ * Fixtures synthétiques (aucune donnée client réelle).
+ */
 class ProductionTableTest extends TestCase
 {
     use InteractsWithProductionSheets, RefreshDatabase;
@@ -32,79 +35,111 @@ class ProductionTableTest extends TestCase
     }
 
     /** @param array<string, mixed> $attributes */
-    private function record(array $attributes): ProductionRecord
+    private function record(array $attributes = []): ProductionRecord
     {
         static $n = 0;
         $n++;
 
-        return ProductionRecord::create(array_merge([
+        return ProductionRecord::createWithReference(array_merge([
             'source_key' => hash('sha256', 'fixture-'.$n),
-            'contract_reference' => 'CT-'.$n,
+            'date' => '2026-10-01',
+            'cial' => str_pad((string) $n, 6, '0', STR_PAD_LEFT),
             'client_name' => 'Client '.$n,
-            'city' => 'Casablanca',
-            'product' => 'Auto',
-            'status' => 'Actif',
-            'source_row' => $n + 1,
+            'first_name' => 'Prenom '.$n,
+            'cotisation' => '91.55',
+            'premium_annual' => '1098.6',
+            'cie' => 'KIASSURE',
+            'product' => 'COVER UP - N3',
+            'date_effet' => '2026-12-01',
+            'validation' => 'CHLOE',
+            'type_signature' => 'SMS',
             'last_synced_at' => now(),
         ], $attributes));
     }
 
-    public function test_index_returns_records_with_meta_last_sync_and_filter_options(): void
+    public function test_index_returns_the_mapped_fields_meta_and_filter_options(): void
     {
         [, $token] = $this->actingAdmin();
 
-        $this->fakeSheet([['CT-1', 'Un', 'Rabat', 'Auto', 'Actif']]);
+        $this->fakeSheet([$this->sheetRow()]);
         $this->postJson('/api/production/sync', [], $this->headers($token))->assertCreated();
 
         $response = $this->getJson('/api/production', $this->headers($token));
 
         $response->assertOk()
             ->assertJsonPath('meta.total', 1)
-            ->assertJsonPath('data.0.contract_reference', 'CT-1')
+            ->assertJsonPath('data.0.cial', '0123456')
+            ->assertJsonPath('data.0.nom', 'FOURRIQUES')
+            ->assertJsonPath('data.0.prenom', 'Danielle')
+            ->assertJsonPath('data.0.date', '2026-10-01')
+            ->assertJsonPath('data.0.date_effet', '2026-12-01')
+            ->assertJsonPath('data.0.cotisation', '91.55')
+            ->assertJsonPath('data.0.prime_annuelle', '1098.6')
+            ->assertJsonPath('data.0.cie', 'KIASSURE')
+            ->assertJsonPath('data.0.produit', 'COVER UP - N3')
+            ->assertJsonPath('data.0.validation', 'CHLOE')
+            ->assertJsonPath('data.0.type_signature', 'SMS')
             ->assertJsonPath('data.0.phone', null)
             ->assertJsonPath('last_sync.status', 'completed')
             ->assertJsonPath('last_sync.performed_by', 'Admin Production')
-            ->assertJsonPath('filters.cities.0', 'Rabat')
-            ->assertJsonPath('filters.products.0', 'Auto')
-            ->assertJsonPath('filters.statuses.0', 'Actif');
+            ->assertJsonPath('filters.cies.0', 'KIASSURE')
+            ->assertJsonPath('filters.produits.0', 'COVER UP - N3')
+            ->assertJsonPath('filters.validations.0', 'CHLOE')
+            ->assertJsonPath('filters.type_signatures.0', 'SMS');
+
+        $this->assertMatchesRegularExpression(
+            '/^CTR-\d{4}-[A-Z0-9]{8}$/',
+            (string) $response->json('data.0.reference_contrat'),
+        );
     }
 
-    public function test_search_matches_contract_client_and_phone(): void
+    public function test_search_matches_reference_names_cial_insurer_and_phone(): void
     {
         [, $token] = $this->actingAdmin();
 
-        $this->record(['contract_reference' => 'CT-ALPHA', 'client_name' => 'Amrani Mohamed', 'phone' => '0611223344']);
-        $this->record(['contract_reference' => 'CT-BETA', 'client_name' => 'Benali Ahmed', 'phone' => null]);
+        $alpha = $this->record([
+            'reference_contrat' => 'CTR-2026-ALPHA123',
+            'client_name' => 'Amrani',
+            'first_name' => 'Mohamed',
+            'cial' => '000987',
+            'cie' => 'NEOLIANE',
+            'product' => 'Energik - EN1',
+            'phone' => '0611223344',
+        ]);
+        $this->record([
+            'reference_contrat' => 'CTR-2026-BETA4567',
+            'client_name' => 'Benali',
+            'first_name' => 'Ahmed',
+            'cial' => '000123',
+            'cie' => 'KIASSURE',
+            'product' => 'INSTASSUR - Niveau 1',
+        ]);
 
-        $byContract = $this->getJson('/api/production?search=ALPHA', $this->headers($token));
-        $byContract->assertOk()->assertJsonPath('meta.total', 1);
-        $this->assertSame('CT-ALPHA', $byContract->json('data.0.contract_reference'));
-
-        $byClient = $this->getJson('/api/production?search=benali', $this->headers($token));
-        $byClient->assertOk()->assertJsonPath('meta.total', 1);
-        $this->assertSame('CT-BETA', $byClient->json('data.0.contract_reference'));
-
-        // Recherche téléphonique : la casse/formatage n'a pas d'importance.
-        $byPhone = $this->getJson('/api/production?search=0611223344', $this->headers($token));
-        $byPhone->assertOk()->assertJsonPath('meta.total', 1);
-        $this->assertSame('CT-ALPHA', $byPhone->json('data.0.contract_reference'));
+        foreach (['ALPHA123', 'Amrani', 'Mohamed', '000987', 'NEOLIANE', '0611223344'] as $term) {
+            $response = $this->getJson('/api/production?search='.rawurlencode($term), $this->headers($token));
+            $response->assertOk()->assertJsonPath('meta.total', 1);
+            $this->assertSame($alpha->id, $response->json('data.0.id'), "Recherche « {$term} »");
+        }
     }
 
-    public function test_filters_by_city_product_status_and_phone_presence(): void
+    public function test_filters_by_cie_produit_validation_signature_and_phone_presence(): void
     {
         [, $token] = $this->actingAdmin();
 
-        $this->record(['city' => 'Rabat', 'product' => 'Auto', 'status' => 'Actif', 'phone' => '0611111111']);
-        $this->record(['city' => 'Fès', 'product' => 'Santé', 'status' => 'Résilié', 'phone' => null]);
-        $this->record(['city' => 'Rabat', 'product' => 'Santé', 'status' => 'Actif', 'phone' => null]);
+        $this->record(['cie' => 'KIASSURE', 'product' => 'A', 'validation' => 'CHLOE', 'type_signature' => 'SMS', 'phone' => '0611111111']);
+        $this->record(['cie' => 'NEOLIANE', 'product' => 'B', 'validation' => 'CARINE', 'type_signature' => 'MAIL', 'phone' => null]);
+        $this->record(['cie' => 'KIASSURE', 'product' => 'B', 'validation' => 'CHLOE', 'type_signature' => null, 'phone' => null]);
 
-        $this->getJson('/api/production?city='.rawurlencode('Rabat'), $this->headers($token))
+        $this->getJson('/api/production?cie=KIASSURE', $this->headers($token))
             ->assertOk()->assertJsonPath('meta.total', 2);
 
-        $this->getJson('/api/production?product='.rawurlencode('Santé'), $this->headers($token))
+        $this->getJson('/api/production?produit=B', $this->headers($token))
             ->assertOk()->assertJsonPath('meta.total', 2);
 
-        $this->getJson('/api/production?status='.rawurlencode('Résilié'), $this->headers($token))
+        $this->getJson('/api/production?validation='.rawurlencode('CARINE'), $this->headers($token))
+            ->assertOk()->assertJsonPath('meta.total', 1);
+
+        $this->getJson('/api/production?type_signature=MAIL', $this->headers($token))
             ->assertOk()->assertJsonPath('meta.total', 1);
 
         $this->getJson('/api/production?has_phone=yes', $this->headers($token))
@@ -114,12 +149,15 @@ class ProductionTableTest extends TestCase
             ->assertOk()->assertJsonPath('meta.total', 2);
     }
 
-    public function test_sorting_and_pagination(): void
+    public function test_sorting_and_pagination_use_whitelisted_columns(): void
     {
         [, $token] = $this->actingAdmin();
 
         foreach (range(1, 25) as $i) {
-            $this->record(['contract_reference' => 'CT-'.str_pad((string) $i, 3, '0', STR_PAD_LEFT), 'client_name' => 'Client '.$i]);
+            $this->record([
+                'cial' => str_pad((string) $i, 6, '0', STR_PAD_LEFT),
+                'client_name' => 'Client '.str_pad((string) $i, 2, '0', STR_PAD_LEFT),
+            ]);
         }
 
         $page1 = $this->getJson('/api/production?per_page=10&page=1', $this->headers($token));
@@ -129,9 +167,12 @@ class ProductionTableTest extends TestCase
         $page3 = $this->getJson('/api/production?per_page=10&page=3', $this->headers($token));
         $this->assertCount(5, $page3->json('data'));
 
-        $sorted = $this->getJson('/api/production?sort_by=client_name&sort_direction=desc&per_page=5', $this->headers($token));
+        $sorted = $this->getJson('/api/production?sort_by=nom&sort_direction=desc&per_page=5', $this->headers($token));
         $sorted->assertOk();
-        $this->assertSame('Client 9', $sorted->json('data.0.client_name')); // tri lexicographique descendant
+        $this->assertSame('Client 25', $sorted->json('data.0.nom'));
+
+        $byDate = $this->getJson('/api/production?sort_by=date_effet&sort_direction=asc&per_page=5', $this->headers($token));
+        $byDate->assertOk();
 
         // Tri inconnu : refusé côté serveur, jamais appliqué tel quel.
         $this->getJson('/api/production?sort_by=client_name;drop table users', $this->headers($token))
@@ -141,7 +182,7 @@ class ProductionTableTest extends TestCase
     public function test_phone_can_be_added_updated_and_cleared(): void
     {
         [, $token] = $this->actingAdmin();
-        $record = $this->record([]);
+        $record = $this->record();
 
         $this->patchJson("/api/production/{$record->id}/phone", ['phone' => '+212612345678'], $this->headers($token))
             ->assertOk()
@@ -163,14 +204,13 @@ class ProductionTableTest extends TestCase
     public function test_phone_validation_accepts_intended_formats_and_rejects_the_rest(): void
     {
         [, $token] = $this->actingAdmin();
-        $record = $this->record([]);
+        $record = $this->record();
 
         $accepted = ['0612345678', '06 12 34 56 78', '+212 6 12 34 56 78', '+212-612-345-678', '(06) 12.34.56.78', '06/12/34/56/78'];
-        foreach ($accepted as $index => $phone) {
+        foreach ($accepted as $phone) {
             $this->patchJson("/api/production/{$record->id}/phone", ['phone' => $phone], $this->headers($token))
                 ->assertOk("Format refusé à tort : {$phone}");
-            // La valeur saisie est conservée telle quelle (aucune altération).
-            $this->assertSame($phone, $record->refresh()->phone, "Valeur altérée pour {$phone} (#{$index})");
+            $this->assertSame($phone, $record->refresh()->phone, "Valeur altérée pour {$phone}");
         }
 
         foreach (['12345', 'abcdefgh', '06 12 34 56 78 poste 12', '+ 0612345678', '12345678901234567890123'] as $phone) {
@@ -179,22 +219,18 @@ class ProductionTableTest extends TestCase
                 ->assertJsonValidationErrors('phone');
         }
 
-        // Le champ est obligatoire dans la requête (présence), pour ne pas
-        // effacer un numéro par omission.
         $this->patchJson("/api/production/{$record->id}/phone", [], $this->headers($token))
             ->assertStatus(422)
             ->assertJsonValidationErrors('phone');
 
-        // Le numéro précédent (valide) n'a pas été effacé par les refus.
         $this->assertSame('06/12/34/56/78', $record->refresh()->phone);
     }
 
     public function test_sync_cannot_be_triggered_with_a_client_supplied_spreadsheet(): void
     {
         [, $token] = $this->actingAdmin();
-        $reader = $this->fakeSheet([['CT-1', 'Un', null, null, null]]);
+        $reader = $this->fakeSheet([$this->sheetRow()]);
 
-        // Le client tente d'imposer un classeur/plage : ignorés par le serveur.
         $this->postJson('/api/production/sync', [
             'spreadsheet_id' => 'un-autre-classeur',
             'range' => 'Secret!A1:Z9',
@@ -206,15 +242,13 @@ class ProductionTableTest extends TestCase
 
     public function test_production_endpoints_require_an_active_admin(): void
     {
-        $record = $this->record([]);
+        $record = $this->record();
 
-        // Non authentifié.
         $this->getJson('/api/production')->assertUnauthorized();
         $this->postJson('/api/production/sync')->assertUnauthorized();
         $this->patchJson("/api/production/{$record->id}/phone", ['phone' => '0612345678'])->assertUnauthorized();
         $this->getJson('/api/production/syncs')->assertUnauthorized();
 
-        // Authentifié mais rôle non administrateur.
         $agent = User::create([
             'name' => 'Agent',
             'email' => 'agent@test.ma',
@@ -229,11 +263,11 @@ class ProductionTableTest extends TestCase
         $this->patchJson("/api/production/{$record->id}/phone", ['phone' => '0612345678'], $this->headers($agentToken))->assertForbidden();
     }
 
-    public function test_sync_history_is_listed_most_recent_first(): void
+    public function test_sync_history_is_listed_most_recent_first_and_includes_warnings(): void
     {
         [, $token] = $this->actingAdmin();
 
-        $this->fakeSheet([['CT-1', 'Un', null, null, null]]);
+        $this->fakeSheet([$this->sheetRow()]);
         $this->postJson('/api/production/sync', [], $this->headers($token))->assertCreated();
 
         $this->failReaderWith(GoogleSheetsException::unreachable());
@@ -244,5 +278,6 @@ class ProductionTableTest extends TestCase
         $response->assertOk();
         $this->assertSame('failed', $response->json('data.0.status'));
         $this->assertSame('completed', $response->json('data.1.status'));
+        $this->assertArrayHasKey('warnings', $response->json('data.1'));
     }
 }

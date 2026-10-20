@@ -14,8 +14,10 @@ nettoyés et restaurations.
   extractions, doublons, administrateurs, production) dispose de filtres, d'un
   tri et d'une pagination côté serveur.
 
-Le module **Production** (Phase 1, §12) synchronise des lignes contrat/client
-depuis un **Google Sheets** et gère les numéros de téléphone des clients.
+Le module **Production** (Phase 1, §12) synchronise les 11 colonnes de production
+depuis un **Google Sheets** (DATE, CIAL, NOM, PRENOM, COTISATION, PRIME ANNUELLE,
+CIE, PRODUIT, Date d'effet, VALIDATION, TYPE DE SIGNATURE), génère une référence
+de contrat unique et gère les numéros de téléphone des clients.
 
 ## 1. Prérequis
 
@@ -261,32 +263,56 @@ d'appels.
 | `GOOGLE_APPLICATION_CREDENTIALS` | Chemin du JSON de compte de service (relatif à `backend/` ou absolu) | `storage/app/google/service-account.json` |
 | `GOOGLE_SHEETS_HEADER_ROW` | Ligne (1-indexée) de recherche des en-têtes | `1` |
 | `GOOGLE_SHEETS_TIMEOUT` | Délai HTTP (secondes) | `30` |
+| `GOOGLE_SHEETS_RETRY_ATTEMPTS` | Reprises bornées sur 429/5xx/réseau | `3` |
+| `GOOGLE_SHEETS_RETRY_DELAY_MS` | Délai initial de reprise (ms, doublé à chaque essai) | `400` |
 
 Puis `php artisan config:clear` (ou `config:cache` en production).
 
 ### 12.2 Correspondance des colonnes et identité
 
-La correspondance **en-tête de feuille → champ interne** est explicite dans
-`backend/config/production.php` (`mapping`). Adaptez les libellés à votre feuille :
-ils sont comparés après normalisation (casse, accents et espaces ignorés).
+La correspondance **en-tête de feuille → champ canonique → colonne physique**
+est explicite dans `backend/config/production.php` (`mapping`) et
+`App\Models\ProductionRecord::SHEET_FIELDS`. Les libellés sont comparés après
+normalisation (casse, accents, espaces multiples, espaces insécables et
+apostrophes typographiques) ; aucun alias non vérifié n'est accepté.
 
-| Champ interne | Possession | Rôle |
-|---|---|---|
-| `contract_reference` | Feuille | Numéro de contrat — **composante de la clé métier** |
-| `client_name` | Feuille | Nom du client — **composante de la clé métier** |
-| `city`, `product`, `status` | Feuille | Colonnes affichées/filtrables |
-| `phone` | **Application** | Numéro saisi par l'utilisateur, jamais écrasé |
+| En-tête feuille | Champ canonique | Colonne physique | Possession |
+|---|---|---|---|
+| `DATE` | `date` | `date` | Feuille |
+| `CIAL` | `cial` | `cial` | Feuille (chaîne, zéros initiaux conservés) |
+| `NOM` | `nom` | `client_name` | Feuille |
+| `PRENOM` | `prenom` | `first_name` | Feuille |
+| `COTISATION` | `cotisation` | `cotisation` | Feuille (montant validé, non arrondi) |
+| `PRIME ANNUELLE` | `prime_annuelle` | `premium_annual` | Feuille (montant validé, non arrondi) |
+| `CIE` | `cie` | `cie` | Feuille |
+| `PRODUIT` | `produit` | `product` | Feuille |
+| `Date d'effet` | `date_effet` | `date_effet` | Feuille |
+| `VALIDATION` | `validation` | `validation` | Feuille (valeur libre, aucune décision inventée) |
+| `TYPE DE SIGNATURE` | `type_signature` | `type_signature` | Feuille (valeur libre) |
+| *(généré)* | `reference_contrat` | `reference_contrat` | **Application**, jamais écrasé |
+| *(saisie locale)* | — | `phone`, `phone_normalise` | **Application**, jamais écrasé |
 
-- **Identité** (`identity`) : `contract_reference` + `client_name`. La clé est la
-  concaténation normalisée de ces valeurs, hachée en SHA-256 et stockée dans
-  `production_records.source_key` (contrainte d'unicité). Le **numéro de ligne
-  n'est jamais une identité** : il n'est conservé que pour l'information.
-- **Champs obligatoires** (`required`) : une ligne dont un champ obligatoire est
-  vide est **rejetée et signalée** (ligne, champ, motif) sans interrompre la
-  synchronisation.
-- Un en-tête obligatoire absent de la feuille fait **échouer la synchronisation**
-  avec un message actionnable : aucune colonne n'est devinée, aucune ligne n'est
-  écrite.
+- **Référence contrat** : `CTR-<année>-<suffixe>` (ex. `CTR-2026-K7M2QX9P`),
+  générée à la création, unique en base (index unique) et **stable** à travers
+  les synchronisations et les modifications. Le remplissage des lignes
+  antérieures utilise `CTR-<année>-<id sur 6 chiffres>` et ne remplace jamais une
+  référence existante.
+- **Identité** (`identity`) : 7 champs stables — `date`, `cial`, `nom`,
+  `prenom`, `cie`, `produit`, `date_effet`. La clé est leur concaténation
+  normalisée, hachée en SHA-256 et stockée dans `production_records.source_key`
+  (contrainte d'unicité). Aucun identifiant unique n'existe dans la feuille :
+  deux lignes identiques sur ces 7 champs sont considérées comme la même
+  entité ; toute différence crée une ligne distincte plutôt que d'écraser une
+  ligne existante. Le **numéro de ligne n'est jamais une identité**.
+- **Champs obligatoires** (`required`) : `date`, `cial`, `nom`, `prenom`,
+  `cie`, `produit`, `date_effet`. Une ligne dont un de ces champs est vide, ou
+  dont une date/un montant est invalide, est **rejetée et signalée** (ligne,
+  champ, motif) sans interrompre la synchronisation ni écrire de valeur 0.
+- **En-têtes** : les 11 en-têtes doivent être présents **une seule fois**. Un
+  en-tête manquant ou dupliqué fait **échouer la synchronisation** avant toute
+  écriture. Les colonnes inconnues (ou sans en-tête) contenant des données sont
+  signalées en avertissement et **jamais importées** ; les colonnes vides en fin
+  de ligne sont ignorées.
 
 ### 12.3 Comportement de la synchronisation
 
@@ -301,10 +327,18 @@ ils sont comparés après normalisation (casse, accents et espaces ignorés).
   supprimée. Aucune politique de suppression de source n'existe en Phase 1.
 - **Résumé** : chaque synchronisation enregistre un `ProductionSync`
   (`completed` / `partial` / `failed`) avec lignes lues, créées, mises à jour,
-  vides ignorées, rejetées et le détail des rejets. Les erreurs ne contiennent
-  ni données personnelles ni secrets.
+  vides ignorées, rejetées, le détail des rejets et des **avertissements**
+  (colonne inconnue, lecture potentiellement tronquée par la plage). Les erreurs
+  ne contiennent ni données personnelles ni secrets.
+- **Erreurs Google** : 401/403/404, quota (429) et 5xx sont distingués ; les
+  erreurs transitoires sont réessayées de façon bornée avec un délai croissant.
+  Aucune écriture n'est effectuée avant une lecture entièrement validée.
+- **Lecture tronquée** : si le nombre de lignes atteint la borne de
+  `GOOGLE_SHEETS_RANGE`, la synchronisation est marquée `partial` (jamais
+  « réussie ») et aucune ligne locale n'est supprimée.
 - Écritures groupées par lots de 500 dans une transaction : un échec laisse la
-  base dans son état précédent.
+  base dans son état précédent. Aucune transaction n'est ouverte pendant les
+  appels réseau.
 
 ### 12.4 Numéros de téléphone
 
@@ -344,8 +378,9 @@ ils sont comparés après normalisation (casse, accents et espaces ignorés).
 ### 12.5 API
 
 ```
-GET   /api/production                — liste (search, city, product, status, has_phone,
-                                        sort_by, sort_direction, page, per_page)
+GET   /api/production                — liste (search, cie, produit, validation,
+                                        type_signature, has_phone, sort_by,
+                                        sort_direction, page, per_page)
 POST  /api/production/sync           — synchronisation Google Sheets (idempotente)
 GET   /api/production/syncs          — historique court des synchronisations
 PATCH /api/production/{id}/phone     — saisie du numéro client
@@ -353,11 +388,18 @@ PATCH /api/production/{id}/phone     — saisie du numéro client
 
 ### 12.6 Interface
 
-La page `/production` (entrée « Production » de la barre latérale) propose la
-recherche (contrat, client, téléphone), des filtres (ville, produit, statut,
-présence d'un numéro) alimentés par les valeurs réellement présentes, un tri,
-la pagination, l'édition en ligne du numéro, la sélection de lignes (toutes les
-lignes affichées de la page courante) et le résumé de la dernière synchronisation.
+La page `/production` (entrée « Production » de la barre latérale) affiche les
+12 colonnes attendues : référence contrat générée + les 11 colonnes de la
+feuille (`DATE`, `CIAL`, `NOM`, `PRENOM`, `COTISATION`, `PRIME ANNUELLE`, `CIE`,
+`PRODUIT`, `Date d'effet`, `VALIDATION`, `TYPE DE SIGNATURE`), le téléphone et la
+date de synchronisation. Les dates sont affichées en `jj/mm/aaaa` ; les montants
+sont formatés en français sans symbole monétaire (la source n'en contient pas).
+
+Elle propose la recherche (référence, nom, prénom, CIAL, CIE, téléphone), des
+filtres (CIE, produit, validation, type de signature, présence d'un numéro)
+alimentés par les valeurs réellement présentes, un tri, la pagination, l'édition
+en ligne du numéro, la sélection de lignes (page courante) et le résumé de la
+dernière synchronisation, avertissements inclus.
 
 **Sélection** : elle porte sur la page affichée et est **effacée** à chaque
 changement de page, de filtre, de tri ou de recherche (un bandeau l'indique) ;
@@ -395,7 +437,8 @@ cd ../frontend && npm run dev  # http://localhost:3000/production
 | 403 « partagez la feuille » | Classeur non partagé avec `client_email` du compte de service |
 | 404 / « classeur introuvable » | `GOOGLE_SHEETS_SPREADSHEET_ID` ou `GOOGLE_SHEETS_RANGE` erronés (nom d'onglet inclus) |
 | « en-tête(s) obligatoire(s) introuvable(s) » | Libellés de colonnes différents : compléter `mapping` dans `config/production.php` |
-| Doublons après synchronisation | Champs d'identité insuffisants ou instables : ajuster `identity` |
+| Doublons après synchronisation | Une valeur d'identité (date, CIAL, nom, prénom, CIE, produit, date d'effet) a changé dans la feuille : l'ancienne ligne est conservée et une nouvelle est créée (aucune fusion automatique) ; arbitrer manuellement |
+| « colonne non reconnue » en avertissement | Colonne absente du mapping : vérifier `config/production.php` ; elle n'est jamais importée implicitement |
 | Téléphones qui disparaissent | Ne se produit pas par conception ; vérifier qu'aucun code n'écrit `phone` hors `PATCH /phone` |
 | Synchronisation lente | La lecture est bornée par `GOOGLE_SHEETS_RANGE` ; réduire la plage. Un import en file d'attente pour de très gros volumes est un évolution future documentée |
 

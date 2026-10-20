@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { CallVerificationPanel } from "@/components/telephony/CallVerificationPanel";
 import * as api from "@/services";
 import { ApiError } from "@/services/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
+import { formatAmount, formatDateOnly, formatDateTime, formatNumber } from "@/lib/format";
 import {
   PRODUCTION_SYNC_BADGE,
   type ProductionRecord,
@@ -22,30 +22,35 @@ import {
 } from "@/types/production";
 
 /**
- * Phase 1 / Phase 2 — Table de production.
+ * Table de production.
  *
- * Les lignes proviennent de la synchronisation Google Sheets (contrat, client,
- * ville, produit, statut). Le numéro de téléphone, lui, est saisi ici et n'est
- * jamais écrasé par une synchronisation ultérieure.
+ * Une ligne = un contrat de la feuille Google Sheets : DATE, CIAL, NOM,
+ * PRENOM, COTISATION, PRIME ANNUELLE, CIE, PRODUIT, Date d'effet, VALIDATION
+ * et TYPE DE SIGNATURE. La `reference_contrat` est générée par l'application
+ * (elle n'existe pas dans la feuille). Le téléphone, lui, est saisi ici et
+ * n'est jamais écrasé par une synchronisation.
  *
  * Sélection : elle porte sur les lignes affichées de la page courante. Tout
  * changement de page, de filtre, de tri ou de recherche l'efface
  * explicitement — aucune sélection « fantôme » n'est soumise.
  *
- * Phase 2 : « Vérifier les appels » ouvre un panneau qui lance une recherche
- * asynchrone. Les échecs, capacités non prises en charge et vrais « aucun
- * appel » y restent distincts ; aucun résultat ne vaut validation de contrat.
+ * « Vérifier les appels » ouvre le panneau téléphonique existant ; aucun
+ * résultat d'appel ne vaut validation de contrat.
  */
 
 const SORT_OPTIONS = [
   { value: "id:asc", label: "Ordre d'import" },
-  { value: "contract_reference:asc", label: "Contrat (A→Z)" },
-  { value: "contract_reference:desc", label: "Contrat (Z→A)" },
-  { value: "client_name:asc", label: "Client (A→Z)" },
-  { value: "client_name:desc", label: "Client (Z→A)" },
-  { value: "city:asc", label: "Ville (A→Z)" },
-  { value: "product:asc", label: "Produit (A→Z)" },
-  { value: "status:asc", label: "Statut" },
+  { value: "reference_contrat:asc", label: "Référence contrat (A→Z)" },
+  { value: "date:desc", label: "DATE — plus récente" },
+  { value: "date:asc", label: "DATE — plus ancienne" },
+  { value: "cial:asc", label: "CIAL (A→Z)" },
+  { value: "nom:asc", label: "NOM (A→Z)" },
+  { value: "nom:desc", label: "NOM (Z→A)" },
+  { value: "prenom:asc", label: "PRENOM (A→Z)" },
+  { value: "cie:asc", label: "CIE (A→Z)" },
+  { value: "produit:asc", label: "PRODUIT (A→Z)" },
+  { value: "date_effet:desc", label: "Date d'effet — plus récente" },
+  { value: "validation:asc", label: "VALIDATION (A→Z)" },
   { value: "last_synced_at:desc", label: "Synchronisé — plus récent" },
 ];
 
@@ -61,9 +66,10 @@ export default function ProductionPage() {
   useAuth(); // session requise par le shell
 
   const [search, setSearch] = useState("");
-  const [city, setCity] = useState("");
-  const [product, setProduct] = useState("");
-  const [status, setStatus] = useState("");
+  const [cie, setCie] = useState("");
+  const [produit, setProduit] = useState("");
+  const [validation, setValidation] = useState("");
+  const [typeSignature, setTypeSignature] = useState("");
   const [hasPhone, setHasPhone] = useState("all");
   const [sort, setSort] = useState("id:asc");
   const [pageSize, setPageSize] = useState(25);
@@ -80,16 +86,17 @@ export default function ProductionPage() {
     () =>
       api.listProduction({
         search,
-        city,
-        product,
-        status,
+        cie,
+        produit,
+        validation,
+        typeSignature,
         hasPhone: hasPhone as "all" | "yes" | "no",
         sortBy,
         sortDirection: sortDirection as api.SortDirection,
         page,
         pageSize,
       }),
-    [search, city, product, status, hasPhone, sort, pageSize, page, refreshKey],
+    [search, cie, produit, validation, typeSignature, hasPhone, sort, pageSize, page, refreshKey],
   );
 
   const data = records.data;
@@ -111,9 +118,10 @@ export default function ProductionPage() {
 
   function resetFilters() {
     setSearch("");
-    setCity("");
-    setProduct("");
-    setStatus("");
+    setCie("");
+    setProduit("");
+    setValidation("");
+    setTypeSignature("");
     setHasPhone("all");
     setSort("id:asc");
     setPageSize(25);
@@ -135,19 +143,29 @@ export default function ProductionPage() {
   const visibleIds = data?.data.map((r) => r.id) ?? [];
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected[id]);
 
-  const advancedCount = [city, product, status, hasPhone !== "all" ? "yes" : ""].filter(Boolean).length;
+  const advancedCount = [
+    cie,
+    produit,
+    validation,
+    typeSignature,
+    hasPhone !== "all" ? "yes" : "",
+  ].filter(Boolean).length;
 
-  const cityOptions = [
-    { value: "", label: "Toutes les villes" },
-    ...(data?.filters.cities ?? []).map((c) => ({ value: c, label: c })),
+  const cieOptions = [
+    { value: "", label: "Toutes les CIE" },
+    ...(data?.filters.cies ?? []).map((c) => ({ value: c, label: c })),
   ];
-  const productOptions = [
+  const produitOptions = [
     { value: "", label: "Tous les produits" },
-    ...(data?.filters.products ?? []).map((p) => ({ value: p, label: p })),
+    ...(data?.filters.produits ?? []).map((p) => ({ value: p, label: p })),
   ];
-  const statusOptions = [
-    { value: "", label: "Tous les statuts" },
-    ...(data?.filters.statuses ?? []).map((s) => ({ value: s, label: s })),
+  const validationOptions = [
+    { value: "", label: "Toutes les validations" },
+    ...(data?.filters.validations ?? []).map((v) => ({ value: v, label: v })),
+  ];
+  const typeSignatureOptions = [
+    { value: "", label: "Tous les types de signature" },
+    ...(data?.filters.type_signatures ?? []).map((t) => ({ value: t, label: t })),
   ];
 
   return (
@@ -160,8 +178,9 @@ export default function ProductionPage() {
           <h1 className="text-headline-lg tracking-tight text-on-surface">Production</h1>
           <p className="text-body-compact text-on-surface-variant">
             {formatNumber(data?.total ?? 0)} ligne{data && data.total > 1 ? "s" : ""} synchronisée
-            {data && data.total > 1 ? "s" : ""} depuis Google Sheets. Les numéros de téléphone sont
-            saisis ici et conservés à chaque synchronisation.
+            {data && data.total > 1 ? "s" : ""} depuis Google Sheets. Les 11 colonnes de la feuille
+            sont affichées ; la référence contrat est générée par l&apos;application et le numéro de
+            téléphone est saisi ici, jamais écrasé par une synchronisation.
           </p>
         </div>
         <SyncButton onSynced={() => setRefreshKey((k) => k + 1)} />
@@ -175,7 +194,7 @@ export default function ProductionPage() {
             <SearchInput
               value={search}
               onChange={(v) => changeFilter(() => setSearch(v), "recherche modifiée")}
-              placeholder="N° contrat, client, téléphone…"
+              placeholder="Référence, nom, prénom, CIAL, CIE, téléphone…"
             />
             <SelectFilter
               value={sort}
@@ -198,22 +217,30 @@ export default function ProductionPage() {
         advanced={
           <>
             <SelectFilter
-              value={city}
-              onChange={(v) => changeFilter(() => setCity(v), "filtre ville modifié")}
-              options={cityOptions}
-              ariaLabel="Filtrer par ville"
+              value={cie}
+              onChange={(v) => changeFilter(() => setCie(v), "filtre CIE modifié")}
+              options={cieOptions}
+              ariaLabel="Filtrer par CIE"
             />
             <SelectFilter
-              value={product}
-              onChange={(v) => changeFilter(() => setProduct(v), "filtre produit modifié")}
-              options={productOptions}
+              value={produit}
+              onChange={(v) => changeFilter(() => setProduit(v), "filtre produit modifié")}
+              options={produitOptions}
               ariaLabel="Filtrer par produit"
             />
             <SelectFilter
-              value={status}
-              onChange={(v) => changeFilter(() => setStatus(v), "filtre statut modifié")}
-              options={statusOptions}
-              ariaLabel="Filtrer par statut"
+              value={validation}
+              onChange={(v) => changeFilter(() => setValidation(v), "filtre validation modifié")}
+              options={validationOptions}
+              ariaLabel="Filtrer par validation"
+            />
+            <SelectFilter
+              value={typeSignature}
+              onChange={(v) =>
+                changeFilter(() => setTypeSignature(v), "filtre type de signature modifié")
+              }
+              options={typeSignatureOptions}
+              ariaLabel="Filtrer par type de signature"
             />
             <SelectFilter
               value={hasPhone}
@@ -302,7 +329,14 @@ export default function ProductionPage() {
           <EmptyState
             title="Aucune ligne de production"
             message={
-              data.total === 0 && !hasActiveFilters({ search, city, product, status, hasPhone })
+              data.total === 0 && !hasActiveFilters({
+                search,
+                cie,
+                produit,
+                validation,
+                typeSignature,
+                hasPhone,
+              })
                 ? "Lancez une première synchronisation Google Sheets pour importer les lignes de production."
                 : "Aucune ligne ne correspond aux critères. Modifiez la recherche ou réinitialisez les filtres."
             }
@@ -311,7 +345,7 @@ export default function ProductionPage() {
       ) : data ? (
         <section className="rounded-xl bg-surface-lowest shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full min-w-[1560px] text-left">
               <thead>
                 <tr className="border-b border-outline-variant text-label-table-header uppercase tracking-wider text-on-surface-variant">
                   <th className="w-10 py-2.5 pl-lg pr-3">
@@ -334,13 +368,22 @@ export default function ProductionPage() {
                       }}
                     />
                   </th>
-                  <th className="px-3 py-2.5">Contrat</th>
-                  <th className="px-3 py-2.5">Client</th>
-                  <th className="px-3 py-2.5">Téléphone</th>
-                  <th className="hidden px-3 py-2.5 md:table-cell">Ville</th>
-                  <th className="hidden px-3 py-2.5 lg:table-cell">Produit</th>
-                  <th className="px-3 py-2.5">Statut</th>
-                  <th className="hidden px-3 py-2.5 xl:table-cell">Synchronisé le</th>
+                  <th className="whitespace-nowrap px-3 py-2.5">Référence contrat</th>
+                  <th className="whitespace-nowrap px-3 py-2.5">DATE</th>
+                  <th className="whitespace-nowrap px-3 py-2.5">CIAL</th>
+                  <th className="min-w-[150px] px-3 py-2.5">NOM</th>
+                  <th className="min-w-[120px] px-3 py-2.5">PRENOM</th>
+                  <th className="whitespace-nowrap px-3 py-2.5 text-right">COTISATION</th>
+                  <th className="whitespace-nowrap px-3 py-2.5 text-right">PRIME ANNUELLE</th>
+                  <th className="min-w-[110px] px-3 py-2.5">CIE</th>
+                  <th className="min-w-[160px] px-3 py-2.5">PRODUIT</th>
+                  <th className="whitespace-nowrap px-3 py-2.5">Date d&apos;effet</th>
+                  <th className="min-w-[110px] px-3 py-2.5">VALIDATION</th>
+                  <th className="min-w-[150px] px-3 py-2.5">TYPE DE SIGNATURE</th>
+                  <th className="min-w-[150px] px-3 py-2.5">Téléphone</th>
+                  <th className="hidden whitespace-nowrap px-3 py-2.5 xl:table-cell">
+                    Synchronisé le
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/40 text-body-compact">
@@ -354,15 +397,37 @@ export default function ProductionPage() {
                     <td className="py-2.5 pl-lg pr-3">
                       <input
                         type="checkbox"
-                        aria-label={`Sélectionner la ligne ${row.contract_reference ?? row.id}`}
+                        aria-label={`Sélectionner la ligne ${row.reference_contrat ?? row.id}`}
                         checked={Boolean(selected[row.id])}
                         onChange={() => toggleRow(row)}
                       />
                     </td>
-                    <td className="px-3 py-2.5 font-mono font-semibold text-on-surface">
-                      {row.contract_reference ?? "—"}
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono font-semibold text-on-surface">
+                      {row.reference_contrat ?? "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-on-surface">{row.client_name ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tabular text-on-surface">
+                      {formatDateOnly(row.date)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono tabular text-on-surface">
+                      {row.cial ?? "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-on-surface">{row.nom ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-on-surface">{row.prenom ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular text-on-surface">
+                      {formatAmount(row.cotisation)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular text-on-surface">
+                      {formatAmount(row.prime_annuelle)}
+                    </td>
+                    <td className="px-3 py-2.5 text-on-surface-variant">{row.cie ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-on-surface-variant">{row.produit ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tabular text-on-surface">
+                      {formatDateOnly(row.date_effet)}
+                    </td>
+                    <td className="px-3 py-2.5 text-on-surface-variant">{row.validation ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-on-surface-variant">
+                      {row.type_signature ?? "—"}
+                    </td>
                     <td className="px-3 py-2.5">
                       <PhoneCell
                         record={row}
@@ -374,14 +439,7 @@ export default function ProductionPage() {
                         }}
                       />
                     </td>
-                    <td className="hidden px-3 py-2.5 text-on-surface-variant md:table-cell">
-                      {row.city ?? "—"}
-                    </td>
-                    <td className="hidden px-3 py-2.5 text-on-surface-variant lg:table-cell">
-                      {row.product ?? "—"}
-                    </td>
-                    <td className="px-3 py-2.5 text-on-surface-variant">{row.status ?? "—"}</td>
-                    <td className="hidden px-3 py-2.5 text-on-surface-variant tabular xl:table-cell">
+                    <td className="hidden whitespace-nowrap px-3 py-2.5 tabular text-on-surface-variant xl:table-cell">
                       {row.last_synced_at ? formatDateTime(row.last_synced_at) : "—"}
                     </td>
                   </tr>
@@ -405,13 +463,19 @@ export default function ProductionPage() {
 
 function hasActiveFilters(filters: {
   search: string;
-  city: string;
-  product: string;
-  status: string;
+  cie: string;
+  produit: string;
+  validation: string;
+  typeSignature: string;
   hasPhone: string;
 }): boolean {
   return Boolean(
-    filters.search || filters.city || filters.product || filters.status || filters.hasPhone !== "all",
+    filters.search ||
+      filters.cie ||
+      filters.produit ||
+      filters.validation ||
+      filters.typeSignature ||
+      filters.hasPhone !== "all",
   );
 }
 
@@ -484,20 +548,8 @@ function SyncButton({ onSynced }: { onSynced: () => void }) {
             <SyncCount label="Vides ignorées" value={result.skipped_count} />
             <SyncCount label="Rejetées" value={result.failed_count} />
           </dl>
-          {result.row_errors && result.row_errors.length > 0 ? (
-            <details className="mt-sm">
-              <summary className="cursor-pointer text-on-surface-variant">
-                Détail des lignes rejetées ({result.row_errors.length})
-              </summary>
-              <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto">
-                {result.row_errors.map((rowError) => (
-                  <li key={`${rowError.row}-${rowError.field}`} className="text-label-badge">
-                    Ligne {rowError.row} · {rowError.field} — {rowError.reason}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
+          <SyncWarnings warnings={result.warnings} />
+          <SyncRowErrors rowErrors={result.row_errors} />
         </div>
       ) : null}
     </div>
@@ -510,6 +562,38 @@ function SyncCount({ label, value }: { label: string; value: number }) {
       <dt className="text-on-surface-variant">{label}</dt>
       <dd className="font-mono tabular">{formatNumber(value)}</dd>
     </div>
+  );
+}
+
+/** Avertissements non bloquants (colonne inconnue, lecture tronquée…). */
+function SyncWarnings({ warnings }: { warnings: string[] | null }) {
+  if (!warnings || warnings.length === 0) return null;
+
+  return (
+    <ul className="mt-sm space-y-1 rounded bg-warning-container px-md py-2 text-label-badge text-on-warning-container">
+      {warnings.map((warning, index) => (
+        <li key={index}>{warning}</li>
+      ))}
+    </ul>
+  );
+}
+
+function SyncRowErrors({ rowErrors }: { rowErrors: ProductionSyncSummary["row_errors"] }) {
+  if (!rowErrors || rowErrors.length === 0) return null;
+
+  return (
+    <details className="mt-sm">
+      <summary className="cursor-pointer text-on-surface-variant">
+        Détail des lignes rejetées ({rowErrors.length})
+      </summary>
+      <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto">
+        {rowErrors.map((rowError) => (
+          <li key={`${rowError.row}-${rowError.field}`} className="text-label-badge">
+            Ligne {rowError.row} · {rowError.field} — {rowError.reason}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -560,20 +644,8 @@ function LastSyncPanel({ sync }: { sync: ProductionSyncSummary | null }) {
           {sync.error_summary}
         </p>
       ) : null}
-      {sync.row_errors && sync.row_errors.length > 0 ? (
-        <details className="mt-sm">
-          <summary className="cursor-pointer text-body-compact text-on-surface-variant">
-            Lignes rejetées ({sync.row_errors.length})
-          </summary>
-          <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto text-label-badge text-on-surface-variant">
-            {sync.row_errors.map((rowError) => (
-              <li key={`${rowError.row}-${rowError.field}`}>
-                Ligne {rowError.row} · {rowError.field} — {rowError.reason}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
+      <SyncWarnings warnings={sync.warnings} />
+      <SyncRowErrors rowErrors={sync.row_errors} />
     </section>
   );
 }
@@ -649,7 +721,7 @@ function PhoneCell({
           ref={inputRef}
           type="tel"
           value={value}
-          aria-label={`Numéro de téléphone du client ${record.client_name ?? record.id}`}
+          aria-label={`Numéro de téléphone du client ${[record.nom, record.prenom].filter(Boolean).join(" ") || record.id}`}
           aria-invalid={error !== null}
           placeholder="+212 6 12 34 56 78"
           onChange={(e) => setValue(e.target.value)}

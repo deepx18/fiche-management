@@ -69,6 +69,14 @@ class GoogleSheetsException extends RuntimeException
         );
     }
 
+    public static function rateLimited(): self
+    {
+        return new self(
+            'Quota Google Sheets temporairement dépassé (429). La synchronisation a été interrompue '
+            .'sans modifier les données. Réessayez dans quelques minutes.'
+        );
+    }
+
     public static function apiError(int $status, ?string $detail = null): self
     {
         $message = 'Erreur de l\'API Google Sheets (HTTP '.$status.'). Réessayez plus tard '

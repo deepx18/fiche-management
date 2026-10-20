@@ -531,9 +531,10 @@ export async function archiveFile(id: number): Promise<void> {
 
 export interface ProductionFilters {
   search?: string;
-  city?: string;
-  product?: string;
-  status?: string;
+  cie?: string;
+  produit?: string;
+  validation?: string;
+  typeSignature?: string;
   hasPhone?: "all" | "yes" | "no";
   sortBy?: string;
   sortDirection?: SortDirection;
@@ -558,9 +559,10 @@ export async function listProduction(filters: ProductionFilters = {}): Promise<P
     filters: ProductionFilterOptions;
   }>("/api/production", {
     search: filters.search || undefined,
-    city: filters.city || undefined,
-    product: filters.product || undefined,
-    status: filters.status || undefined,
+    cie: filters.cie || undefined,
+    produit: filters.produit || undefined,
+    validation: filters.validation || undefined,
+    type_signature: filters.typeSignature || undefined,
     has_phone: filters.hasPhone && filters.hasPhone !== "all" ? filters.hasPhone : undefined,
     sort_by: filters.sortBy,
     sort_direction: filters.sortDirection,
@@ -571,7 +573,7 @@ export async function listProduction(filters: ProductionFilters = {}): Promise<P
   return {
     ...toPaginated(response),
     lastSync: response.last_sync,
-    filters: response.filters ?? { cities: [], products: [], statuses: [] },
+    filters: response.filters ?? { cies: [], produits: [], validations: [], type_signatures: [] },
   };
 }
 

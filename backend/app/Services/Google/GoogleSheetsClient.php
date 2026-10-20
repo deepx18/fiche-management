@@ -2,6 +2,7 @@
 
 namespace App\Services\Google;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -62,17 +63,7 @@ class GoogleSheetsClient implements SheetsReader
         $resolvedRange = $range ?? (string) config('production.range');
         $url = self::SHEETS_API.'/'.rawurlencode($spreadsheetId).'/values/'.rawurlencode($resolvedRange);
 
-        try {
-            $response = Http::withToken($token)
-                ->acceptJson()
-                ->timeout((int) config('production.timeout', 30))
-                ->get($url, ['majorDimension' => 'ROWS']);
-        } catch (Throwable $e) {
-            report($e);
-
-            throw GoogleSheetsException::unreachable();
-        }
-
+        $response = $this->requestValues($url, $token);
         $status = $response->status();
 
         if ($status === 401) {
@@ -84,9 +75,12 @@ class GoogleSheetsClient implements SheetsReader
         if ($status === 404) {
             throw GoogleSheetsException::spreadsheetNotFound();
         }
+        if ($status === 429) {
+            throw GoogleSheetsException::rateLimited();
+        }
         if (! $response->successful()) {
-            $detail = $response->successful() && ($body = $response->body()) ? trim($body) : null;
-            throw GoogleSheetsException::apiError($status, $detail);
+            $body = $response->body();
+            throw GoogleSheetsException::apiError($status, $body !== '' ? trim($body) : null);
         }
 
         $values = $response->json('values');
@@ -109,6 +103,60 @@ class GoogleSheetsClient implements SheetsReader
         }
 
         return $rows;
+    }
+
+    /**
+     * Appelle l'API avec reprises bornées sur erreurs transitoires.
+     *
+     * 429 (quota) et 5xx sont réessayés ; 401/403/404 ne le sont pas (une
+     * configuration ou un partage ne se corrige pas en réessayant). Une
+     * nouvelle lecture est idempotente : aucune écriture n'est faite ici.
+     */
+    private function requestValues(string $url, string $token): Response
+    {
+        $attempts = max(1, min(5, (int) config('production.retry.attempts', 3)));
+        $baseDelay = max(0, (int) config('production.retry.base_delay_ms', 400));
+
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                $response = Http::withToken($token)
+                    ->acceptJson()
+                    ->timeout((int) config('production.timeout', 30))
+                    ->get($url, [
+                        'majorDimension' => 'ROWS',
+                        // Valeurs affichées : les dates restent lisibles
+                        // (jj/mm/aaaa) au lieu de numéros de série.
+                        'valueRenderOption' => 'FORMATTED_VALUE',
+                    ]);
+            } catch (Throwable $e) {
+                if ($attempt < $attempts) {
+                    $this->backoff($baseDelay, $attempt);
+
+                    continue;
+                }
+
+                report($e);
+
+                throw GoogleSheetsException::unreachable();
+            }
+
+            $status = $response->status();
+            if (in_array($status, [429, 500, 502, 503, 504], true) && $attempt < $attempts) {
+                $this->backoff($baseDelay, $attempt);
+
+                continue;
+            }
+
+            return $response;
+        }
+    }
+
+    private function backoff(int $baseDelayMs, int $attempt): void
+    {
+        $delayMs = min(5000, $baseDelayMs * (2 ** ($attempt - 1)));
+        if ($delayMs > 0) {
+            usleep($delayMs * 1000);
+        }
     }
 
     /** Échange le JWT du compte de service contre un jeton d'accès OAuth2. */
