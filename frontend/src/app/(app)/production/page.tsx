@@ -179,7 +179,7 @@ export default function ProductionPage() {
           <p className="text-body-compact text-on-surface-variant">
             {formatNumber(data?.total ?? 0)} ligne{data && data.total > 1 ? "s" : ""} synchronisée
             {data && data.total > 1 ? "s" : ""} depuis Google Sheets. Les 11 colonnes de la feuille
-            sont affichées ; la référence contrat est générée par l&apos;application et le numéro de
+            sont affichées ;<br/> la référence contrat est générée par l&apos;application et le numéro de
             téléphone est saisi ici, jamais écrasé par une synchronisation.
           </p>
         </div>
@@ -529,7 +529,7 @@ function SyncButton({ onSynced }: { onSynced: () => void }) {
       {result ? (
         <div
           role="status"
-          className="max-w-md rounded bg-surface-low p-md text-body-compact text-on-surface shadow-sm"
+          className="max-w-3xl rounded bg-surface-low p-md text-body-compact text-on-surface shadow-sm"
         >
           <div className="flex items-center gap-sm">
             <span

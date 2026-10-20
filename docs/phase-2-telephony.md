@@ -185,11 +185,67 @@ GET  /api/production/calls/searches/{id}/calls — appels du lot
 GET  /api/production/{record}/calls            — appels d'une ligne
 POST /api/calls/{call}/recording/retrieve      — récupération Issabel (202)
 GET  /api/calls/{call}/recording               — téléchargement privé
+GET  /api/telephony/diagnostics/{provider}     — test de connexion unitaire
+                                                 (provider : kavkom | issabel)
 POST /api/webhooks/kavkom/cdr                  — ingestion CDR (secret partagé)
 ```
 
 Toutes les routes sauf le webhook sont dans le groupe `auth:sanctum` +
 `admin`. Le webhook exige `KAVKOM_WEBHOOK_SECRET` dans l'en-tête configuré.
+
+### Tester une connexion sans artisan
+
+Chaque fournisseur se teste **séparément**, en lecture seule, sans lancer de
+recherche d'appels ni de commande artisan :
+
+```bash
+cd backend
+php artisan serve --port=8000            # une seule fois
+
+# Jeton d'administrateur actif (voir POST /api/login)
+TOKEN="…"
+
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' \
+  http://127.0.0.1:8000/api/telephony/diagnostics/kavkom | jq
+
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' \
+  http://127.0.0.1:8000/api/telephony/diagnostics/issabel | jq
+```
+
+Réponse (extrait) :
+
+```json
+{
+  "data": {
+    "provider": "issabel",
+    "status": "warning",
+    "checked_at": "2026-10-20T10:00:00.000000Z",
+    "duration_ms": 18,
+    "checks": [
+      { "key": "enabled",           "status": "ok",      "message": "ISSABEL_ENABLED=true." },
+      { "key": "connection",        "status": "ok",      "message": "Connexion établie en 12 ms." },
+      { "key": "table",             "status": "ok",      "message": "Table « cdr » présente…" },
+      { "key": "columns",           "status": "ok",      "message": "Colonnes requises présentes…" },
+      { "key": "optional_columns",  "status": "ok",      "message": "Détectées : uniqueid, recordingfile." },
+      { "key": "latest_cdr",        "status": "ok",      "message": "Dernier CDR enregistré : …" },
+      { "key": "recording_root",    "status": "warning", "message": "…non configuré…" }
+    ]
+  }
+}
+```
+
+| Fournisseur | Ce qui est réellement vérifié | Effet de bord |
+|---|---|---|
+| `kavkom` | `KAVKOM_WEBHOOK_ENABLED`, présence de `KAVKOM_WEBHOOK_SECRET` (valeur jamais affichée), en-tête attendu, endpoint d'ingestion, capacités documentées. | Aucun appel réseau, aucune écriture. |
+| `issabel` | `ISSABEL_ENABLED`, complétude de `ISSABEL_DB_*`, **connexion MySQL réelle**, présence de la table CDR, colonnes requises (`calldate`, `src`, `dst`), colonnes optionnelles détectées, dernier `calldate`, lisibilité de `ISSABEL_RECORDING_ROOT`. | `SELECT` uniquement (`MAX(calldate)`), aucune écriture, aucun enregistrement copié. |
+
+`status` est le pire état des contrôles : `ok`, `warning` (configuration
+incomplète mais non bloquante, ex. répertoire audio absent) ou `error`
+(connexion impossible, table/colonnes manquantes, secret absent). Chaque
+contrôle en erreur expose aussi `code` avec le type déjà utilisé par la
+recherche (`configuration`, `authentication`, `permission`, `timeout`,
+`provider_error`). Un fournisseur désactivé n'est **pas** contacté : il renvoie
+un `warning` explicite.
 
 ## 8. Tests exécutés
 
@@ -253,6 +309,7 @@ Couverture Phase 2 (fournisseurs simulés, aucune credentials) :
 | Webhook 503 | `KAVKOM_WEBHOOK_SECRET` vide. |
 | Issabel `failed` / configuration | `ISSABEL_ENABLED`, hôte, base, compte ou table CDR non renseignés. |
 | Issabel 401/403 | Compte MySQL refusé ou droits insuffisants ; vérifier le compte en lecture seule. |
+| Diagnostic rapide | `GET /api/telephony/diagnostics/issabel` ou `/kavkom` (admin) : contrôles détaillés, fournisseur par fournisseur, en lecture seule. |
 | Aucun appel malgré un numéro connu | Vérifier période, format fournisseur (`src`/`dst`), pagination/limite, et la présence du numéro dans ces colonnes. |
 | Doublons | Vérifier la présence de `uniqueid` ; sinon l'empreinte documentée est utilisée. |
 | Enregistrement introuvable | `recordingfile` absent, répertoire non monté, fichier expiré ou nom différent. |

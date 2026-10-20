@@ -82,7 +82,7 @@ return [
         // Répertoire privé des enregistrements, lisible par l'application.
         // Laisser vide si les fichiers ne sont pas accessibles : l'état
         // « récupération non prise en charge » sera affiché.
-        'recording_root' => env('ISSABEL_RECORDING_ROOT'),
+        'recording_root' => env('ISSABEL_RECORDING_ROOT', '/mnt/issabel-recordings'),
     ],
 
 ];

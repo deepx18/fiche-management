@@ -462,6 +462,11 @@ Points essentiels :
 - **Enregistrements** : stockage privé, nom opaque, type MIME et taille
   vérifiés, téléchargement réservé aux administrateurs, purge configurable via
   `php artisan telephony:prune-recordings`.
+- **Tester une connexion** : `GET /api/telephony/diagnostics/kavkom` et
+  `GET /api/telephony/diagnostics/issabel` (administrateurs) renvoient un
+  diagnostic en lecture seule, fournisseur par fournisseur, sans commande
+  artisan : configuration Kavkom, ou connexion MySQL CDR + schéma + dernier CDR
+  pour Issabel. Détail dans `docs/phase-2-telephony.md` (§7).
 
 **Aucun test live Kavkom/Issabel n'a été exécuté** dans cet environnement
 (absence d'identifiants et d'accès). Les tests automatisés utilisent des

@@ -13,6 +13,7 @@ use App\Http\Controllers\ImportedFileController;
 use App\Http\Controllers\ImportHistoryController;
 use App\Http\Controllers\KavkomWebhookController;
 use App\Http\Controllers\ProductionController;
+use App\Http\Controllers\TelephonyDiagnosticsController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -82,6 +83,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/production/{record}/calls', [CallSearchController::class, 'recordCalls'])->whereNumber('record');
         Route::post('/calls/{call}/recording/retrieve', [CallSearchController::class, 'retrieveRecording'])->whereNumber('call')->middleware('throttle:30,1');
         Route::get('/calls/{call}/recording', [CallRecordingController::class, 'show'])->whereNumber('call');
+
+        // Diagnostic de connexion par fournisseur (lecture seule), sans
+        // passer par une commande artisan : Kavkom = configuration du
+        // webhook, Issabel = connexion MySQL CDR réelle et schéma.
+        Route::get('/telephony/diagnostics/{provider}', [TelephonyDiagnosticsController::class, 'show'])
+            ->middleware('throttle:30,1');
 
         // Historique d'import.
         Route::get('/import-history', [ImportHistoryController::class, 'index']);

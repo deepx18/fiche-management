@@ -138,32 +138,7 @@ class IssabelCdrRepository implements IssabelCdrReader
 
     private function mapConnectionError(Throwable $e): TelephonyException
     {
-        $message = strtolower($e->getMessage());
-
-        if (str_contains($message, 'access denied')) {
-            return TelephonyException::authentication('Issabel');
-        }
-
-        if (str_contains($message, 'command denied') || str_contains($message, 'permission denied')) {
-            return TelephonyException::permission('Issabel');
-        }
-
-        if (str_contains($message, 'timed out')
-            || str_contains($message, 'timeout')
-            || str_contains($message, 'connection refused')
-            || str_contains($message, 'unknown host')
-            || str_contains($message, 'no such host')) {
-            return TelephonyException::timeout('Issabel');
-        }
-
-        if (str_contains($message, 'unknown database') || str_contains($message, 'doesn\'t exist')) {
-            return TelephonyException::configuration(
-                'Base ou table CDR Issabel introuvable. Vérifiez ISSABEL_DB_DATABASE, ISSABEL_CDR_TABLE '
-                .'et les droits du compte en lecture seule.'
-            );
-        }
-
-        return TelephonyException::providerError('Issabel');
+        return IssabelConnectionErrors::map($e);
     }
 
     private function string(mixed $value): ?string
