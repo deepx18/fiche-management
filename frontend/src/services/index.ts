@@ -33,12 +33,14 @@ import type {
   CallRecord,
   CallSearch,
   CallSearchItem,
+  TelephonyDiagnostics,
 } from "@/types/telephony";
 import * as mock from "@/data/mock";
 import {
   ApiError,
   apiDownload,
   apiGet,
+  apiGetBlob,
   apiSend,
   apiUpload,
   getToken,
@@ -651,6 +653,24 @@ export async function listCallSearchCalls(
   return toPaginated(response);
 }
 
+/** Appels déjà associés à une sélection de lignes (sans relancer de job). */
+export async function listRecordCalls(
+  recordIds: number[],
+  page = 1,
+  pageSize = 100,
+): Promise<Paginated<CallRecord>> {
+  const params = new URLSearchParams();
+  for (const id of recordIds) params.append("record_ids[]", String(id));
+  params.set("page", String(page));
+  params.set("per_page", String(pageSize));
+
+  const response = await apiGet<{ data: CallRecord[]; meta: PageMeta }>(
+    `/api/production/calls/matches?${params.toString()}`,
+  );
+
+  return toPaginated(response);
+}
+
 /** Récupère un enregistrement Issabel vers le stockage privé (asynchrone). */
 export async function retrieveCallRecording(callId: number): Promise<string> {
   const response = await apiSend<{ data: { state: string } }>(
@@ -658,6 +678,22 @@ export async function retrieveCallRecording(callId: number): Promise<string> {
     `/api/calls/${callId}/recording/retrieve`,
   );
   return response.data.state;
+}
+
+/**
+ * Audio authentifié pour le lecteur intégré (blob local, jamais une URL
+ * publique). La route API vérifie les droits à chaque requête.
+ */
+export function fetchRecordingBlob(callId: number): Promise<Blob> {
+  return apiGetBlob(`/api/calls/${callId}/recording/stream`);
+}
+
+/** Diagnostic de connexion en lecture seule (Kavkom : configuration, Issabel : CDR). */
+export async function getTelephonyDiagnostics(provider: "issabel" | "kavkom"): Promise<TelephonyDiagnostics> {
+  const response = await apiGet<{ data: TelephonyDiagnostics }>(
+    `/api/telephony/diagnostics/${provider}`,
+  );
+  return response.data;
 }
 
 /* -------------------------------------------------------------- démos héritées (mock) */

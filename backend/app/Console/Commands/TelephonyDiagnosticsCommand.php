@@ -12,8 +12,8 @@ use Illuminate\Console\Command;
  *
  * Usage:
  *   php artisan telephony:diagnostics
- *   php artisan telephony:diagnostics --provider kavkom
- *   php artisan telephony:diagnostics --provider issabel
+ *   php artisan telephony:diagnostics kavkom
+ *   php artisan telephony:diagnostics issabel
  *
  * The command is read-only: no CDR is created, no secret is emitted,
  * and no network request beyond the minimal checks is performed.

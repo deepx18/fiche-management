@@ -11,6 +11,7 @@ use App\Models\ProductionRecord;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
 /**
@@ -43,6 +44,13 @@ class CallSearchService
     ): CallSearch {
         $providers = array_values(array_intersect($providers, $this->registry->names()));
         if ($providers === []) {
+            // Par défaut, ne pas interroger un fournisseur qui ne prend pas en
+            // charge la recherche (Kavkom) : cela produirait un lot « partiel »
+            // systématique sans appel recherché.
+            $providers = $this->registry->searchableNames();
+        }
+
+        if ($providers === []) {
             $providers = $this->registry->names();
         }
 
@@ -65,6 +73,19 @@ class CallSearchService
 
         if ($records->count() !== count(array_unique($recordIds))) {
             throw new InvalidArgumentException('Une ou plusieurs lignes de production sont introuvables.');
+        }
+
+        // Double-clic ou nouvel envoi du même formulaire : un lot identique
+        // encore en cours est réutilisé au lieu d'empiler des jobs en double.
+        $existing = $this->findActiveDuplicate($user, $recordIds, $from, $to, $providers, $retrieveRecordings);
+        if ($existing !== null) {
+            Log::info('Recherche d\'appels déjà en cours réutilisée', [
+                'search_id' => $existing->id,
+                'records' => count($recordIds),
+                'providers' => $providers,
+            ]);
+
+            return $existing;
         }
 
         $search = CallSearch::create([
@@ -121,7 +142,10 @@ class CallSearchService
                     CallSearchItem::STATUS_QUEUED,
                     $number['e164'],
                 );
-                RunCallSearchJob::dispatch($item->id);
+                // afterCommit : si l'appelant ouvre une transaction, le job ne
+                // part pas avant validation (aucune transaction ici, donc
+                // dispatch immédiat).
+                RunCallSearchJob::dispatch($item->id)->afterCommit();
                 $queued++;
             }
         }
@@ -130,11 +154,74 @@ class CallSearchService
             'requested_count' => CallSearchItem::query()->where('call_search_id', $search->id)->count(),
         ]);
 
+        Log::info('Recherche d\'appels planifiée', [
+            'search_id' => $search->id,
+            'records' => count($recordIds),
+            'providers' => $providers,
+            'retrieve_recordings' => $retrieveRecordings,
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+        ]);
+
         if ($queued === 0) {
             $this->progress->refresh($search);
         }
 
         return $search->refresh();
+    }
+
+    /**
+     * Un lot identique (même utilisateur, même plage, mêmes fournisseurs,
+     * mêmes lignes) encore queued/running est considéré comme déjà lancé.
+     *
+     * @param  list<int>  $recordIds
+     * @param  list<string>  $providers
+     */
+    private function findActiveDuplicate(
+        User $user,
+        array $recordIds,
+        CarbonImmutable $from,
+        CarbonImmutable $to,
+        array $providers,
+        bool $retrieveRecordings,
+    ): ?CallSearch {
+        $expected = array_values(array_unique(array_map('intval', $recordIds)));
+        sort($expected);
+        sort($providers);
+
+        $active = CallSearch::query()
+            ->where('user_id', $user->id)
+            ->whereIn('status', [CallSearch::STATUS_QUEUED, CallSearch::STATUS_RUNNING])
+            ->whereDate('from_date', $from->toDateString())
+            ->whereDate('to_date', $to->toDateString())
+            ->where('retrieve_recordings', $retrieveRecordings)
+            ->latest('id')
+            ->limit(20)
+            ->get();
+
+        foreach ($active as $candidate) {
+            $candidateProviders = (array) $candidate->providers;
+            sort($candidateProviders);
+
+            if ($candidateProviders !== $providers) {
+                continue;
+            }
+
+            $candidateRecords = $candidate->items()
+                ->whereNotNull('production_record_id')
+                ->pluck('production_record_id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+            sort($candidateRecords);
+
+            if ($candidateRecords === $expected) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**

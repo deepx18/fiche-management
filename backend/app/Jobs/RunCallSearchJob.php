@@ -4,16 +4,18 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
-use App\Models\CallRecord;
 use App\Models\CallSearch;
 use App\Models\CallSearchItem;
 use App\Services\Telephony\CallPersister;
 use App\Services\Telephony\CallProviderRegistry;
 use App\Services\Telephony\CallSearchProgress;
 use App\Services\Telephony\CallSearchQuery;
+use App\Services\Telephony\RecordingRetrieval;
 use App\Services\Telephony\TelephonyException;
+use App\Services\Telephony\TelephonyNumber;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -39,6 +41,7 @@ class RunCallSearchJob implements ShouldQueue
         CallProviderRegistry $registry,
         CallPersister $persister,
         CallSearchProgress $progress,
+        RecordingRetrieval $recordings,
     ): void {
         $item = CallSearchItem::query()
             ->with(['callSearch', 'productionRecord'])
@@ -59,6 +62,15 @@ class RunCallSearchJob implements ShouldQueue
             'started_at' => $item->started_at ?? now(),
             'error_code' => null,
             'error_message' => null,
+        ]);
+
+        Log::info('Recherche d\'appels démarrée', [
+            'search_id' => $search->id,
+            'item_id' => $item->id,
+            'provider' => $item->provider,
+            'phone' => TelephonyNumber::mask($item->phone_e164),
+            'from' => $item->from_date?->toDateString(),
+            'to' => $item->to_date?->toDateString(),
         ]);
 
         try {
@@ -95,11 +107,32 @@ class RunCallSearchJob implements ShouldQueue
                 'completed_at' => now(),
             ]);
 
+            Log::info('Recherche d\'appels terminée', [
+                'search_id' => $search->id,
+                'provider' => $item->provider,
+                'phone' => TelephonyNumber::mask($item->phone_e164),
+                'matches' => count($saved),
+            ]);
+
+            // Récupération automatique : l'interface n'a pas à déclencher un
+            // job caché. Chaque appel n'est enqueué qu'une fois, même si le
+            // job est rejoué ou si une autre recherche porte sur la même
+            // ligne (voir RecordingRetrieval).
             if ($search->retrieve_recordings && ($provider->capabilities()['recording_download'] ?? false)) {
-                foreach ($saved as $call) {
-                    if ($call->recording_state === CallRecord::RECORDING_REFERENCE_ONLY) {
-                        RetrieveCallRecordingJob::dispatch($call->id);
+                try {
+                    foreach ($saved as $call) {
+                        $recordings->queue($call);
                     }
+                } catch (Throwable $e) {
+                    // Un problème de file ne doit pas transformer une
+                    // recherche réussie en échec : les métadonnées d'appel
+                    // restent valides et la récupération peut être relancée.
+                    report($e);
+
+                    Log::error('Planification de la récupération en échec', [
+                        'search_id' => $search->id,
+                        'exception' => $e::class,
+                    ]);
                 }
             }
         } catch (TelephonyException $e) {
@@ -117,6 +150,14 @@ class RunCallSearchJob implements ShouldQueue
             $this->markTerminal($item, $e);
         } catch (Throwable $e) {
             report($e);
+
+            Log::error('Recherche d\'appels en échec inattendu', [
+                'search_id' => $search->id,
+                'provider' => $item->provider,
+                'phone' => TelephonyNumber::mask($item->phone_e164),
+                'exception' => $e::class,
+            ]);
+
             $item->update([
                 'status' => CallSearchItem::STATUS_FAILED,
                 'error_code' => 'unexpected',
@@ -139,6 +180,13 @@ class RunCallSearchJob implements ShouldQueue
 
     private function markTerminal(CallSearchItem $item, TelephonyException $e): void
     {
+        Log::warning('Recherche d\'appels échouée', [
+            'item_id' => $item->id,
+            'provider' => $item->provider,
+            'phone' => TelephonyNumber::mask($item->phone_e164),
+            'code' => $e->kind(),
+        ]);
+
         $status = match ($e->kind()) {
             TelephonyException::KIND_UNSUPPORTED => CallSearchItem::STATUS_UNSUPPORTED,
             TelephonyException::KIND_INVALID_NUMBER => CallSearchItem::STATUS_INVALID_PHONE,

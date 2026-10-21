@@ -80,9 +80,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/production/calls/search', [CallSearchController::class, 'store'])->middleware('throttle:30,1');
         Route::get('/production/calls/searches/{search}', [CallSearchController::class, 'show'])->whereNumber('search');
         Route::get('/production/calls/searches/{search}/calls', [CallSearchController::class, 'calls'])->whereNumber('search');
+        // Appels déjà associés à une sélection de lignes (sans relancer de job).
+        Route::get('/production/calls/matches', [CallSearchController::class, 'matches']);
         Route::get('/production/{record}/calls', [CallSearchController::class, 'recordCalls'])->whereNumber('record');
         Route::post('/calls/{call}/recording/retrieve', [CallSearchController::class, 'retrieveRecording'])->whereNumber('call')->middleware('throttle:30,1');
         Route::get('/calls/{call}/recording', [CallRecordingController::class, 'show'])->whereNumber('call');
+        Route::get('/calls/{call}/recording/stream', [CallRecordingController::class, 'stream'])->whereNumber('call');
 
         // Diagnostic de connexion par fournisseur (lecture seule), sans
         // passer par une commande artisan : Kavkom = configuration du

@@ -30,6 +30,11 @@
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
+        <!-- Les tests ne dépendent jamais d'une installation Issabel réelle :
+             chaque test qui en a besoin configure sa connexion et son
+             répertoire d'enregistrements explicitement. -->
+        <env name="ISSABEL_ENABLED" value="false"/>
+        <env name="ISSABEL_RECORDING_ROOT" value=""/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
     </php>

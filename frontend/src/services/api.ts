@@ -108,6 +108,28 @@ export async function apiUpload<T>(path: string, formData: FormData): Promise<T>
     .then((r) => handle<T>(r));
 }
 
+/**
+ * Récupère un binaire authentifié (lecture audio) sans déclencher de
+ * téléchargement. Les erreurs API conservent leur message serveur.
+ */
+export async function apiGetBlob(path: string): Promise<Blob> {
+  const response = await fetch(path, { headers: headers() });
+
+  if (!response.ok) {
+    let payload: Record<string, unknown> | null = null;
+    try {
+      const text = await response.text();
+      payload = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+    } catch {
+      payload = null;
+    }
+
+    throw new ApiError(response.status, extractMessage(payload, `Erreur ${response.status}`), payload);
+  }
+
+  return response.blob();
+}
+
 /** Télécharge un fichier (Authorization header) et déclenche l'enregistrement. */
 export async function apiDownload(path: string, fallbackName: string): Promise<boolean> {
   try {

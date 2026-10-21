@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services\Telephony;
 
+use App\Services\Telephony\Issabel\IssabelCdrSchema;
 use App\Services\Telephony\Issabel\IssabelConnectionErrors;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 final class TelephonyDiagnostics
@@ -80,7 +80,7 @@ final class TelephonyDiagnostics
         $username = trim((string) config("database.connections.{$connection}.username", ''));
 
         $missing = [];
-        foreach (['host' => $host, 'base' => $database, 'user' => $username] as $label => $value) {
+        foreach (['hôte' => $host, 'base' => $database, 'utilisateur' => $username] as $label => $value) {
             if ($value === '') { $missing[] = $label; }
         }
 
@@ -102,7 +102,7 @@ final class TelephonyDiagnostics
         $checks[] = $this->check('connection', 'Connexion MySQL', self::STATUS_OK,
             'Connexion établie en '.(int) round((microtime(true) - $started) * 1000).' ms.');
 
-        try { $hasTable = Schema::connection($connection)->hasTable($table); }
+        try { $hasTable = IssabelCdrSchema::hasTable($connection, $table); }
         catch (Throwable $e) { return [...$checks, $this->failure('table', 'Table CDR', $e)]; }
 
         if (! $hasTable) {
@@ -115,10 +115,15 @@ final class TelephonyDiagnostics
         $checks[] = $this->check('table', 'Table CDR', self::STATUS_OK,
             'Table « '.$table.' » présente dans la base configurée.');
 
-        // Hardcoded from actual CDR table schema (verified 2026-10-20)
-        // Required columns for telephony search: calldate, src, dst
         $requiredColumns = ['calldate', 'src', 'dst'];
-        $missingRequired = array_values(array_diff($requiredColumns, ['calldate', 'src', 'dst']));
+
+        try {
+            $actualColumns = IssabelCdrSchema::columns($connection, $table);
+        } catch (Throwable $e) {
+            return [...$checks, $this->failure('columns', 'Colonnes CDR', $e)];
+        }
+
+        $missingRequired = array_values(array_diff($requiredColumns, $actualColumns));
 
         if ($missingRequired !== []) {
             $checks[] = $this->check('columns', 'Colonnes CDR', self::STATUS_ERROR,
@@ -131,7 +136,7 @@ final class TelephonyDiagnostics
         $checks[] = $this->check('columns', 'Colonnes CDR', self::STATUS_OK,
             'Colonnes requises présentes (calldate, src, dst).');
 
-        $checks[] = $this->optionalColumns();
+        $checks[] = $this->optionalColumns($actualColumns);
 
         try { $latest = DB::connection($connection)->table($table)->max('calldate'); }
         catch (Throwable $e) { return [...$checks, $this->failure('latest_cdr', 'Dernier CDR', $e)]; }
@@ -147,7 +152,8 @@ final class TelephonyDiagnostics
                 'ISSABEL_RECORDING_ROOT n\'est pas configuré : la récupération audio reste indisponible.');
         } elseif (! is_dir($root)) {
             $checks[] = $this->check('recording_root', 'Répertoire des enregistrements', self::STATUS_ERROR,
-                'Répertoire configuré introuvable. Vérifiez ISSABEL_RECORDING_ROOT (montage en lecture seule).',
+                'Répertoire configuré introuvable ou montage indisponible. Vérifiez ISSABEL_RECORDING_ROOT '
+                .'(montage en lecture seule ; un partage déconnecté répond « Input/output error »).',
                 TelephonyException::KIND_CONFIGURATION);
         } elseif (! is_readable($root)) {
             $checks[] = $this->check('recording_root', 'Répertoire des enregistrements', self::STATUS_ERROR,
@@ -161,27 +167,42 @@ final class TelephonyDiagnostics
         return $checks;
     }
 
-    private function optionalColumns(): array
+    /**
+     * @param  list<string>  $actualColumns  colonnes réellement présentes
+     */
+    private function optionalColumns(array $actualColumns): array
     {
         $standard = ['uniqueid', 'linkedid', 'duration', 'billsec', 'disposition', 'recordingfile'];
+        $present = array_values(array_intersect($standard, $actualColumns));
+
         $configured = [
             'agent' => strtolower(trim((string) config('telephony.issabel.agent_column', ''))),
             'direction' => strtolower(trim((string) config('telephony.issabel.direction_column', ''))),
         ];
 
-        $present = array_values(array_filter($standard, static fn (string $column): bool => in_array($column, $standard, true)));
         $declaredMissing = [];
 
-        foreach ($configured as $column) {
-            if ($column === '') { continue; }
-            if (in_array($column, $standard, true)) { $present[] = $column; }
-            else { $declaredMissing[] = $column; }
+        foreach ($configured as $label => $column) {
+            if ($column === '') {
+                continue;
+            }
+
+            if (! in_array($column, $actualColumns, true)) {
+                $declaredMissing[] = $label.' ('.$column.')';
+            }
         }
 
         if ($declaredMissing !== []) {
             return $this->check('optional_columns', 'Colonnes optionnelles', self::STATUS_WARNING,
                 'Colonne(s) configurée(s) mais absente(s) de la table CDR : '
-                .implode(', ', $declaredMissing).'. Laisser la variable concernée vide.');
+                .implode(', ', $declaredMissing).'. Laissez la variable concernée vide.');
+        }
+
+        if (! in_array('recordingfile', $actualColumns, true)) {
+            return $this->check('optional_columns', 'Colonnes optionnelles', self::STATUS_WARNING,
+                'Aucune colonne « recordingfile » dans la table CDR : les appels seront trouvés, '
+                .'mais aucun enregistrement ne pourra être récupéré.'
+                .($present === [] ? '' : ' Colonnes détectées : '.implode(', ', $present).'.'));
         }
 
         return $this->check('optional_columns', 'Colonnes optionnelles', self::STATUS_OK,

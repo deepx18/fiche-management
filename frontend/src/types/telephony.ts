@@ -64,15 +64,21 @@ export interface CallRecordingInfo {
   mime: string | null;
   size: number | null;
   retrieved_at: string | null;
+  /** Résumé sûr du dernier échec (aucun chemin serveur ni secret). */
+  error: string | null;
 }
 
 export interface CallRecord {
   id: number;
   provider: "kavkom" | "issabel" | string;
+  /** Identifiant CDR stable du fournisseur (uniqueid Asterisk par exemple). */
+  provider_call_id: string | null;
   record_id: number | null;
   contract_reference: string | null;
   client_name: string | null;
   phone: string | null;
+  raw_phone: string | null;
+  raw_destination: string | null;
   direction: string | null;
   status: string | null;
   started_at: string | null;
@@ -82,6 +88,33 @@ export interface CallRecord {
   match_basis: string | null;
   recording: CallRecordingInfo;
 }
+
+export type TelephonyCheckStatus = "ok" | "warning" | "error";
+
+export interface TelephonyDiagnosticCheck {
+  key: string;
+  label: string;
+  status: TelephonyCheckStatus;
+  message: string;
+  code?: string;
+}
+
+export interface TelephonyDiagnostics {
+  provider: string;
+  status: TelephonyCheckStatus;
+  checked_at: string;
+  duration_ms: number;
+  checks: TelephonyDiagnosticCheck[];
+}
+
+export const DIAGNOSTIC_BADGE: Record<
+  TelephonyCheckStatus,
+  { label: string; className: string }
+> = {
+  ok: { label: "OK", className: "bg-success-container text-on-success-container" },
+  warning: { label: "À vérifier", className: "bg-warning-container text-on-warning-container" },
+  error: { label: "Erreur", className: "bg-error-container text-on-error-container" },
+};
 
 export const CALL_SEARCH_BADGE: Record<
   CallSearchStatus,

@@ -15,9 +15,12 @@ use App\Services\Telephony\CallProviderRegistry;
 use App\Services\Telephony\CallSearchProgress;
 use App\Services\Telephony\Kavkom\KavkomCallProvider;
 use App\Services\Telephony\ProviderCall;
+use App\Services\Telephony\RecordingRetrieval;
 use App\Services\Telephony\TelephonyException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\FakeCallProvider;
 use Tests\TestCase;
 
@@ -209,6 +212,7 @@ class CallSearchTest extends TestCase
             $this->app->make(CallProviderRegistry::class),
             $this->app->make(CallPersister::class),
             $this->app->make(CallSearchProgress::class),
+            $this->app->make(RecordingRetrieval::class),
         );
 
         $this->assertSame(CallSearchItem::STATUS_FAILED, $item->refresh()->status);
@@ -277,6 +281,112 @@ class CallSearchTest extends TestCase
         $this->assertSame(['ambiguous', 'ambiguous'], $statuses);
         $this->assertSame(0, $fake->callCount);
         $this->assertSame(0, CallRecord::count());
+    }
+
+    public function test_requested_recordings_are_retrieved_automatically(): void
+    {
+        [, $token] = $this->actingAdmin();
+        $record = $this->record();
+
+        Storage::fake('local');
+        $root = sys_get_temp_dir().'/issabel-auto-'.bin2hex(random_bytes(6));
+        mkdir($root.'/2026', 0777, true);
+        mkdir($root.'/2026/10', 0777, true);
+        file_put_contents(
+            $root.'/2026/10/rec-auto.wav',
+            'RIFF'.pack('V', 128).'WAVE'.str_repeat("\0", 128),
+        );
+
+        config([
+            'telephony.issabel.recording_root' => $root,
+            'telephony.recordings.disk' => 'local',
+            'telephony.recordings.mime_types' => ['audio/wav', 'audio/x-wav'],
+        ]);
+
+        $call = $this->providerCall('unique-auto');
+        $call = new ProviderCall(
+            providerCallId: $call->providerCallId,
+            rawPhone: $call->rawPhone,
+            rawDestination: $call->rawDestination,
+            matchedPhoneE164: $call->matchedPhoneE164,
+            status: $call->status,
+            startedAt: $call->startedAt,
+            durationSeconds: $call->durationSeconds,
+            recordingState: CallRecord::RECORDING_REFERENCE_ONLY,
+            recordingProviderReference: '2026/10/rec-auto.wav',
+        );
+
+        $fake = new FakeCallProvider('issabel');
+        $fake->calls = [$call];
+        $this->bindProviders($fake);
+
+        try {
+            $this->postJson('/api/production/calls/search', [
+                'record_ids' => [$record->id],
+                'providers' => ['issabel'],
+                'retrieve_recordings' => true,
+            ], $this->headers($token))->assertCreated();
+
+            $stored = CallRecord::sole();
+            $this->assertSame(CallRecord::RECORDING_STORED, $stored->recording_state);
+            $this->assertNotNull($stored->recording_path);
+            $this->assertTrue(Storage::disk('local')->exists($stored->recording_path));
+        } finally {
+            File::deleteDirectory($root);
+        }
+    }
+
+    public function test_identical_search_in_progress_is_not_queued_twice(): void
+    {
+        [, $token] = $this->actingAdmin();
+        $record = $this->record();
+
+        Queue::fake();
+        $fake = new FakeCallProvider('issabel');
+        $this->bindProviders($fake);
+
+        $payload = [
+            'record_ids' => [$record->id],
+            'providers' => ['issabel'],
+            'from' => now()->subDays(3)->toDateString(),
+            'to' => now()->toDateString(),
+        ];
+
+        $first = $this->postJson('/api/production/calls/search', $payload, $this->headers($token))
+            ->assertCreated()
+            ->json('data.search.id');
+
+        $second = $this->postJson('/api/production/calls/search', $payload, $this->headers($token))
+            ->assertCreated()
+            ->json('data.search.id');
+
+        $this->assertSame($first, $second);
+        $this->assertSame(1, CallSearchItem::count());
+        Queue::assertPushed(RunCallSearchJob::class, 1);
+    }
+
+    public function test_existing_matches_are_listed_for_selected_records(): void
+    {
+        [, $token] = $this->actingAdmin();
+        $record = $this->record();
+
+        $fake = new FakeCallProvider('issabel');
+        $fake->calls = [$this->providerCall('unique-matches')];
+        $this->bindProviders($fake);
+
+        $this->postJson('/api/production/calls/search', [
+            'record_ids' => [$record->id],
+            'providers' => ['issabel'],
+        ], $this->headers($token))->assertCreated();
+
+        $response = $this->getJson(
+            '/api/production/calls/matches?record_ids[]='.$record->id,
+            $this->headers($token),
+        )->assertOk()->assertJsonPath('meta.total', 1);
+
+        $this->assertSame('unique-matches', $response->json('data.0.provider_call_id'));
+        $this->assertSame(CallRecord::RECORDING_REFERENCE_ONLY, $response->json('data.0.recording.state'));
+        $this->assertArrayHasKey('error', $response->json('data.0.recording'));
     }
 
     public function test_repeated_search_updates_without_duplicating_calls(): void

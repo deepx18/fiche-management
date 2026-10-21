@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\RetrieveCallRecordingJob;
 use App\Models\CallRecord;
+use App\Models\ProductionRecord;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -138,6 +141,133 @@ class CallRecordingTest extends TestCase
             ->assertJsonPath('data.state', CallRecord::RECORDING_UNSUPPORTED);
 
         $this->assertSame(CallRecord::RECORDING_UNSUPPORTED, $call->refresh()->recording_state);
+    }
+
+    public function test_recording_stream_supports_range_requests(): void
+    {
+        Storage::fake('local');
+        $audio = 'RIFF'.pack('V', 100).'WAVE'.str_repeat("\0", 100);
+        Storage::disk('local')->put('recordings/issabel/audio.wav', $audio);
+        [, $token] = $this->admin();
+        $call = $this->makeCall();
+
+        $response = $this->get("/api/calls/{$call->id}/recording/stream", array_merge(
+            $this->headers($token),
+            ['Range' => 'bytes=0-9'],
+        ));
+
+        $response->assertStatus(206);
+        $this->assertSame('bytes 0-9/'.strlen($audio), $response->headers->get('Content-Range'));
+        $this->assertSame('bytes', $response->headers->get('Accept-Ranges'));
+        $this->assertStringContainsString('inline', (string) $response->headers->get('Content-Disposition'));
+        $this->assertSame(substr($audio, 0, 10), $response->streamedContent());
+    }
+
+    public function test_recording_stream_returns_full_content_without_range(): void
+    {
+        Storage::fake('local');
+        $audio = 'RIFF'.pack('V', 64).'WAVE'.str_repeat("\0", 64);
+        Storage::disk('local')->put('recordings/issabel/audio.wav', $audio);
+        [, $token] = $this->admin();
+        $call = $this->makeCall();
+
+        $response = $this->get("/api/calls/{$call->id}/recording/stream", $this->headers($token));
+
+        $response->assertOk();
+        $this->assertSame((string) strlen($audio), $response->headers->get('Content-Length'));
+        $this->assertSame($audio, $response->streamedContent());
+    }
+
+    public function test_recording_stream_is_private(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('recordings/issabel/audio.wav', 'audio-data');
+        $call = $this->makeCall();
+
+        $this->getJson("/api/calls/{$call->id}/recording/stream")->assertUnauthorized();
+    }
+
+    public function test_retrieval_without_a_provider_reference_is_refused(): void
+    {
+        Queue::fake();
+        [, $token] = $this->admin();
+        $call = $this->makeCall([
+            'recording_state' => CallRecord::RECORDING_UNAVAILABLE,
+            'recording_disk' => null,
+            'recording_path' => null,
+            'recording_provider_reference' => null,
+        ]);
+
+        $this->postJson("/api/calls/{$call->id}/recording/retrieve", [], $this->headers($token))
+            ->assertStatus(409);
+
+        Queue::assertNothingPushed();
+        $this->assertSame(CallRecord::RECORDING_UNAVAILABLE, $call->refresh()->recording_state);
+    }
+
+    public function test_a_fresh_pending_retrieval_is_not_dispatched_twice(): void
+    {
+        Queue::fake();
+        [, $token] = $this->admin();
+        $call = $this->makeCall([
+            'recording_state' => CallRecord::RECORDING_PENDING,
+            'recording_disk' => null,
+            'recording_path' => null,
+            'recording_provider_reference' => 'rec.wav',
+        ]);
+
+        $this->postJson("/api/calls/{$call->id}/recording/retrieve", [], $this->headers($token))
+            ->assertStatus(409)
+            ->assertJsonPath('data.state', CallRecord::RECORDING_PENDING);
+
+        Queue::assertNothingPushed();
+    }
+
+    public function test_a_stale_pending_retrieval_can_be_retried_and_keeps_the_error_summary(): void
+    {
+        Queue::fake();
+        [, $token] = $this->admin();
+        $call = $this->makeCall([
+            'recording_state' => CallRecord::RECORDING_PENDING,
+            'recording_disk' => null,
+            'recording_path' => null,
+            'recording_provider_reference' => 'rec.wav',
+            'recording_error' => 'Tentative précédente interrompue.',
+        ]);
+        $call->forceFill(['updated_at' => now()->subHour()])->save();
+
+        $this->postJson("/api/calls/{$call->id}/recording/retrieve", [], $this->headers($token))
+            ->assertStatus(202)
+            ->assertJsonPath('data.state', CallRecord::RECORDING_PENDING);
+
+        Queue::assertPushed(RetrieveCallRecordingJob::class, 1);
+        $this->assertNull($call->refresh()->recording_error);
+    }
+
+    public function test_call_payload_exposes_the_recording_error_summary(): void
+    {
+        [, $token] = $this->admin();
+        $record = ProductionRecord::create([
+            'source_key' => hash('sha256', 'audio-error-record'),
+            'client_name' => 'Client Audio',
+            'phone' => '0612345678',
+            'phone_normalise' => '0612345678',
+        ]);
+        $call = $this->makeCall([
+            'production_record_id' => $record->id,
+            'recording_state' => CallRecord::RECORDING_MISSING,
+            'recording_disk' => null,
+            'recording_path' => null,
+            'recording_error' => 'Fichier audio absent du répertoire configuré.',
+        ]);
+
+        $this->getJson(
+            "/api/production/calls/matches?record_ids[]={$record->id}",
+            $this->headers($token),
+        )->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.provider_call_id', $call->provider_call_id)
+            ->assertJsonPath('data.0.recording.error', 'Fichier audio absent du répertoire configuré.');
     }
 
     public function test_retrieval_is_refused_for_a_provider_without_documented_download(): void

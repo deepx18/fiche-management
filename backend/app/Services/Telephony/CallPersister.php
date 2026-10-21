@@ -6,6 +6,7 @@ namespace App\Services\Telephony;
 
 use App\Models\CallRecord;
 use App\Models\ProductionRecord;
+use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
  * Écriture idempotente des appels.
@@ -83,10 +84,28 @@ class CallPersister
             return $existing->refresh();
         }
 
-        return CallRecord::create($attributes + [
-            'provider' => $provider,
-            'provider_call_id' => $call->providerCallId,
-        ]);
+        try {
+            return CallRecord::create($attributes + [
+                'provider' => $provider,
+                'provider_call_id' => $call->providerCallId,
+            ]);
+        } catch (UniqueConstraintViolationException $e) {
+            // Deux recherches simultanées pour la même ligne : l'index unique
+            // (provider, provider_call_id) tranche, la seconde met à jour la
+            // ligne déjà créée au lieu d'échouer.
+            $existing = CallRecord::query()
+                ->where('provider', $provider)
+                ->where('provider_call_id', $call->providerCallId)
+                ->first();
+
+            if ($existing === null) {
+                throw $e;
+            }
+
+            $existing->update($attributes);
+
+            return $existing->refresh();
+        }
     }
 
     /** @return array<string, mixed> */
@@ -97,6 +116,15 @@ class CallPersister
         // Un fichier déjà vérifié et stocké reste la référence de vérité.
         if ($existing?->hasStoredRecording()) {
             return [];
+        }
+
+        // Une récupération en cours ne doit pas être rétrogradée en « simple
+        // référence » par une nouvelle recherche tant que le job travaille.
+        if ($existing?->recording_state === CallRecord::RECORDING_PENDING) {
+            return [
+                'recording_provider_reference' => $call->recordingProviderReference
+                    ?? $existing->recording_provider_reference,
+            ];
         }
 
         // Une simple référence ne doit pas être effacée par une réponse

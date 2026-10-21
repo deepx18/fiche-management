@@ -108,6 +108,40 @@ class IssabelCallProviderTest extends TestCase
         $this->assertNotSame($first->providerCallId, $other->providerCallId);
     }
 
+    public function test_absolute_asterisk_recording_path_is_reduced_to_a_safe_relative_reference(): void
+    {
+        $provider = $this->provider([[
+            'uniqueid' => 'cdr-abs',
+            'src' => '0612345678',
+            'dst' => '0140000000',
+            'calldate' => '2026-10-19 10:00:00',
+            'recordingfile' => '/var/spool/asterisk/monitor/2026/10/20/out-123.wav',
+        ]]);
+
+        $call = $provider->search($this->query())[0];
+
+        $this->assertSame('2026/10/20/out-123.wav', $call->recordingProviderReference);
+        $this->assertSame(CallRecord::RECORDING_REFERENCE_ONLY, $call->recordingState);
+    }
+
+    public function test_url_or_traversal_recording_reference_is_refused(): void
+    {
+        foreach (['https://example.test/rec.wav', '../../etc/passwd', 'C:\\recordings\\rec.wav'] as $reference) {
+            $provider = $this->provider([[
+                'uniqueid' => 'cdr-unsafe',
+                'src' => '0612345678',
+                'dst' => '0140000000',
+                'calldate' => '2026-10-19 10:00:00',
+                'recordingfile' => $reference,
+            ]]);
+
+            $call = $provider->search($this->query())[0];
+
+            $this->assertNull($call->recordingProviderReference, $reference);
+            $this->assertSame(CallRecord::RECORDING_UNAVAILABLE, $call->recordingState, $reference);
+        }
+    }
+
     public function test_disabled_issabel_search_fails_with_clear_configuration_error(): void
     {
         config(['telephony.issabel.enabled' => false]);

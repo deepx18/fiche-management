@@ -7,6 +7,7 @@ namespace App\Services\Telephony\Issabel;
 use App\Models\CallRecord;
 use App\Services\Telephony\Recordings\RecordingStorage;
 use App\Services\Telephony\TelephonyException;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
@@ -62,15 +63,13 @@ class IssabelRecordingFetcher
             throw TelephonyException::recording('Aucune référence de fichier audio exploitable dans le CDR.');
         }
 
-        foreach (explode('/', $reference) as $segment) {
-            if ($segment === '' || $segment === '.' || $segment === '..') {
-                $call->update([
-                    'recording_state' => CallRecord::RECORDING_UNAVAILABLE,
-                    'recording_error' => 'Référence de fichier audio invalide.',
-                ]);
+        if ($this->hasUnsafeSegment($reference)) {
+            $call->update([
+                'recording_state' => CallRecord::RECORDING_UNAVAILABLE,
+                'recording_error' => 'Référence de fichier audio invalide.',
+            ]);
 
-                throw TelephonyException::recording('Référence de fichier audio invalide.');
-            }
+            throw TelephonyException::recording('Référence de fichier audio invalide.');
         }
 
         $realRoot = realpath($root);
@@ -85,13 +84,17 @@ class IssabelRecordingFetcher
             );
         }
 
-        $source = realpath($realRoot.DIRECTORY_SEPARATOR.$reference);
-        $prefix = rtrim($realRoot, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR;
+        [$source, $resolvedReference] = $this->resolveSource($realRoot, $reference, $call);
 
-        if ($source === false || ! str_starts_with($source, $prefix) || ! is_file($source)) {
+        if ($source === null) {
             $call->update([
                 'recording_state' => CallRecord::RECORDING_MISSING,
                 'recording_error' => 'Fichier audio absent du répertoire configuré.',
+            ]);
+
+            Log::warning('Enregistrement Issabel introuvable', [
+                'call_id' => $call->id,
+                'reference' => $reference,
             ]);
 
             throw TelephonyException::recording(
@@ -100,7 +103,7 @@ class IssabelRecordingFetcher
         }
 
         try {
-            $preferred = pathinfo($reference, PATHINFO_EXTENSION);
+            $preferred = pathinfo($resolvedReference, PATHINFO_EXTENSION);
             $stored = $this->storage->storeFromPath($source, 'issabel', $preferred);
 
             $call->update([
@@ -111,6 +114,13 @@ class IssabelRecordingFetcher
                 'recording_size' => $stored['size'],
                 'recording_error' => null,
                 'recording_retrieved_at' => now(),
+            ]);
+
+            Log::info('Enregistrement Issabel récupéré', [
+                'call_id' => $call->id,
+                'reference' => $resolvedReference,
+                'size' => $stored['size'],
+                'mime' => $stored['mime'],
             ]);
         } catch (TelephonyException $e) {
             // Ne jamais écraser un enregistrement déjà valide.
@@ -136,5 +146,54 @@ class IssabelRecordingFetcher
         }
 
         return $call->refresh();
+    }
+
+    private function hasUnsafeSegment(string $reference): bool
+    {
+        foreach (explode('/', $reference) as $segment) {
+            if ($segment === '' || $segment === '.' || $segment === '..') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Résout le fichier réel sous la racine configurée.
+     *
+     * Deux emplacements bornés sont tentés, sans jamais parcourir de
+     * répertoire :
+     *  - le chemin relatif tel que fourni par le CDR ;
+     *  - pour un simple nom de fichier, l'arborescence datée utilisée par
+     *    Asterisk (`AAAA/MM/JJ/nom`), déduite de la date de l'appel.
+     *
+     * `realpath` vérifie ensuite que le résultat reste strictement sous la
+     * racine configurée (protection contre le traversal et les liens sortants).
+     *
+     * @return array{0: string|null, 1: string} [chemin réel, référence résolue]
+     */
+    private function resolveSource(string $realRoot, string $reference, CallRecord $call): array
+    {
+        $prefix = rtrim($realRoot, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR;
+        $candidates = [$reference];
+
+        if (! str_contains($reference, '/') && $call->started_at !== null) {
+            $candidates[] = $call->started_at->format('Y/m/d').'/'.$reference;
+        }
+
+        foreach (array_values(array_unique($candidates)) as $candidate) {
+            if ($this->hasUnsafeSegment($candidate)) {
+                continue;
+            }
+
+            $source = realpath($realRoot.DIRECTORY_SEPARATOR.$candidate);
+
+            if ($source !== false && str_starts_with($source, $prefix) && is_file($source) && is_readable($source)) {
+                return [$source, $candidate];
+            }
+        }
+
+        return [null, $reference];
     }
 }

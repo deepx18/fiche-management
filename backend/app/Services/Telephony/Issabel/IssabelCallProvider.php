@@ -132,9 +132,15 @@ class IssabelCallProvider implements CallProvider
     }
 
     /**
-     * Conserve un chemin relatif sûr fourni par le CDR, jamais un chemin
-     * absolu, une URL ou une composante de traversal. Le répertoire racine
-     * reste exclusivement côté serveur (`ISSABEL_RECORDING_ROOT`).
+     * Conserve un chemin relatif sûr fourni par le CDR, jamais une URL ni une
+     * composante de traversal. Le répertoire racine reste exclusivement côté
+     * serveur (`ISSABEL_RECORDING_ROOT`).
+     *
+     * Certaines installations Issabel enregistrent un chemin absolu dans
+     * `recordingfile` (ex. /var/spool/asterisk/monitor/2026/10/20/out-...wav)
+     * alors que les fichiers ont été déplacés sous `ISSABEL_RECORDING_ROOT`.
+     * On accepte alors le chemin absolu en extraisant la partie relative
+     * correspondant à la structure de répertoires (YYYY/MM/DD/fichier).
      */
     private function recordingReference(mixed $value): ?string
     {
@@ -149,8 +155,34 @@ class IssabelCallProvider implements CallProvider
 
         $value = str_replace('\\', '/', $value);
 
-        if (str_starts_with($value, '/') || preg_match('/^[A-Za-z]:/', $value) === 1) {
+        // URL ou chemin Windows absolu : refusé.
+        if (preg_match('/^[A-Za-z]:/', $value) === 1) {
             return null;
+        }
+
+        if (str_contains($value, '://')) {
+            return null;
+        }
+
+        // Chemin absolu : extraire la partie relative en conservant la
+        // structure YYYY/MM/DD/fichier typique d'Asterisk.
+        if (str_starts_with($value, '/')) {
+            $parts = explode('/', $value);
+            // On cherche la première composante qui ressemble à une année
+            // (20XX) et on conserve tout à partir de ce point.
+            foreach ($parts as $i => $part) {
+                if (preg_match('/^20\d{2}$/', $part)) {
+                    $value = implode('/', array_slice($parts, $i));
+                    break;
+                }
+            }
+
+            // Si aucune année n'est trouvée, on prend les 4 derniers
+            // composants (MM/DD/fichier ou YYYY/MM/DD/fichier).
+            if (str_starts_with($value, '/')) {
+                $parts = array_values(array_filter(explode('/', $value), static fn (string $p): bool => $p !== ''));
+                $value = implode('/', array_slice($parts, -4));
+            }
         }
 
         foreach (explode('/', $value) as $segment) {

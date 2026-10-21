@@ -109,6 +109,27 @@ final class TelephonyNumber
     }
 
     /**
+     * Forme masquée destinée aux journaux : les deux derniers chiffres
+     * seulement restent lisibles, le reste est remplacé par des puces.
+     */
+    public static function mask(?string $phone): ?string
+    {
+        $phone = $phone === null ? '' : trim($phone);
+        if ($phone === '') {
+            return null;
+        }
+
+        $visible = 2;
+        $length = mb_strlen($phone);
+
+        if ($length <= $visible) {
+            return str_repeat('•', $length);
+        }
+
+        return str_repeat('•', $length - $visible).mb_substr($phone, -$visible);
+    }
+
+    /**
      * Variantes utiles pour interroger des colonnes fournisseur sans perdre
      * les numéros nationaux ou « chiffres seuls ».
      *

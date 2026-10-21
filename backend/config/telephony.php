@@ -59,6 +59,9 @@ return [
         ],
         // Purge documentée : 0 = conservation sans limite.
         'retention_days' => (int) env('TELEPHONY_RECORDING_RETENTION_DAYS', 180),
+        // Délai au-delà duquel une récupération « en cours » est considérée
+        // comme abandonnée (worker arrêté) et peut être relancée.
+        'pending_timeout_minutes' => (int) env('TELEPHONY_RECORDING_PENDING_TIMEOUT', 15),
     ],
 
     'kavkom' => [
@@ -79,10 +82,10 @@ return [
         // colonne n'existe pas : aucune valeur n'est inventée.
         'agent_column' => env('ISSABEL_CDR_AGENT_COLUMN'),
         'direction_column' => env('ISSABEL_CDR_DIRECTION_COLUMN'),
-        // Répertoire privé des enregistrements, lisible par l'application.
-        // Laisser vide si les fichiers ne sont pas accessibles : l'état
-        // « récupération non prise en charge » sera affiché.
-        'recording_root' => env('ISSABEL_RECORDING_ROOT', '/mnt/issabel-recordings'),
+        // Répertoire privé des enregistrements (montage en lecture seule),
+        // lisible par le processus Laravel. Vide par défaut : la récupération
+        // est alors explicitement indisponible, jamais devinée.
+        'recording_root' => env('ISSABEL_RECORDING_ROOT', ''),
     ],
 
 ];

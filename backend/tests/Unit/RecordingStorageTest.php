@@ -129,6 +129,65 @@ class RecordingStorageTest extends TestCase
         $this->assertSame([], Storage::disk('local')->allFiles('recordings'));
     }
 
+    public function test_bare_filename_is_resolved_from_the_call_date_directory(): void
+    {
+        mkdir($this->tempDir.'/2026/10/19', 0777, true);
+        file_put_contents(
+            $this->tempDir.'/2026/10/19/rec-dated.wav',
+            'RIFF'.pack('V', 128).'WAVE'.str_repeat("\0", 128),
+        );
+
+        $call = $this->makeCall([
+            'recording_provider_reference' => 'rec-dated.wav',
+            'started_at' => '2026-10-19 10:00:00',
+        ]);
+
+        $updated = app(IssabelRecordingFetcher::class)->retrieve($call);
+
+        $this->assertSame(CallRecord::RECORDING_STORED, $updated->recording_state);
+        $this->assertTrue(Storage::disk('local')->exists($updated->recording_path));
+    }
+
+    public function test_recording_outside_the_allowed_root_via_symlink_is_refused(): void
+    {
+        $outside = sys_get_temp_dir().'/issabel-outside-'.bin2hex(random_bytes(6)).'.wav';
+        file_put_contents($outside, 'RIFF'.pack('V', 64).'WAVE'.str_repeat("\0", 64));
+
+        if (! @symlink($outside, $this->tempDir.'/escape.wav')) {
+            @unlink($outside);
+            $this->markTestSkipped('Les liens symboliques ne sont pas disponibles dans cet environnement.');
+        }
+
+        $call = $this->makeCall(['recording_provider_reference' => 'escape.wav']);
+
+        try {
+            app(IssabelRecordingFetcher::class)->retrieve($call);
+            $this->fail('Un lien sortant du répertoire aurait dû être refusé.');
+        } catch (TelephonyException $e) {
+            $this->assertSame(TelephonyException::KIND_RECORDING, $e->kind());
+        } finally {
+            @unlink($outside);
+        }
+
+        $this->assertSame(CallRecord::RECORDING_MISSING, $call->refresh()->recording_state);
+        $this->assertSame([], Storage::disk('local')->allFiles('recordings'));
+    }
+
+    public function test_unconfigured_root_is_reported_as_unsupported(): void
+    {
+        config(['telephony.issabel.recording_root' => '']);
+        $call = $this->makeCall();
+
+        try {
+            app(IssabelRecordingFetcher::class)->retrieve($call);
+            $this->fail('Une racine non configurée aurait dû être signalée.');
+        } catch (TelephonyException $e) {
+            $this->assertSame(TelephonyException::KIND_UNSUPPORTED, $e->kind());
+        }
+
+        $this->assertSame(CallRecord::RECORDING_UNSUPPORTED, $call->refresh()->recording_state);
+    }
+
     public function test_missing_audio_keeps_call_metadata_and_marks_file_missing(): void
     {
         $call = $this->makeCall(['recording_provider_reference' => 'absent.wav']);

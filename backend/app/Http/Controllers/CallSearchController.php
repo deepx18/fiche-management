@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
-use App\Jobs\RetrieveCallRecordingJob;
 use App\Models\CallRecord;
 use App\Models\CallSearch;
 use App\Models\CallSearchItem;
 use App\Models\ProductionRecord;
 use App\Services\Telephony\CallProviderRegistry;
 use App\Services\Telephony\CallSearchService;
+use App\Services\Telephony\RecordingRetrieval;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -123,6 +123,42 @@ class CallSearchController extends Controller
         ]);
     }
 
+    /**
+     * Appels déjà associés à une sélection de lignes, indépendamment d'un lot
+     * de recherche : l'interface peut montrer l'historique connu dès
+     * l'ouverture du panneau, sans relancer de job.
+     */
+    public function matches(Request $request): JsonResponse
+    {
+        $maxRecords = (int) config('telephony.search.max_records', 50);
+
+        $data = $request->validate([
+            'record_ids' => ['required', 'array', 'min:1', 'max:'.$maxRecords],
+            'record_ids.*' => ['integer', 'distinct'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
+        ]);
+
+        $perPage = min(200, max(1, (int) ($data['per_page'] ?? 100)));
+
+        $calls = CallRecord::query()
+            ->with('productionRecord')
+            ->whereIn('production_record_id', array_map('intval', $data['record_ids']))
+            ->orderByDesc('started_at')
+            ->orderByDesc('id')
+            ->paginate($perPage, ['*'], 'page', (int) ($data['page'] ?? 1));
+
+        return response()->json([
+            'data' => collect($calls->items())->map(fn (CallRecord $call) => $this->presentCall($call)),
+            'meta' => [
+                'current_page' => $calls->currentPage(),
+                'last_page' => $calls->lastPage(),
+                'total' => $calls->total(),
+                'per_page' => $calls->perPage(),
+            ],
+        ]);
+    }
+
     public function recordCalls(Request $request, ProductionRecord $record): JsonResponse
     {
         $perPage = min(200, max(1, (int) $request->query('per_page', 100)));
@@ -143,9 +179,9 @@ class CallSearchController extends Controller
         ]);
     }
 
-    public function retrieveRecording(CallRecord $call): JsonResponse
+    public function retrieveRecording(CallRecord $call, RecordingRetrieval $retrieval): JsonResponse
     {
-        if (in_array($call->recording_state, [CallRecord::RECORDING_STORED, CallRecord::RECORDING_PENDING], true)) {
+        if ($call->hasStoredRecording()) {
             return response()->json(['data' => ['state' => $call->recording_state]]);
         }
 
@@ -156,12 +192,23 @@ class CallSearchController extends Controller
             ], 409);
         }
 
-        // Marquer « en attente » AVANT le dispatch : avec une file synchrone
-        // (tests, développement), le job s'exécute immédiatement et son état
-        // final ne doit pas être écrasé par un « pending » tardif.
-        $call->update(['recording_state' => CallRecord::RECORDING_PENDING]);
-        RetrieveCallRecordingJob::dispatch($call->id);
+        // Le service pose l'état « en attente » AVANT le dispatch : avec une
+        // file synchrone (tests, développement), le job s'exécute
+        // immédiatement et son état final n'est pas écrasé par un « pending »
+        // tardif. Un appel déjà en cours n'est pas ré-enqueué.
+        $queued = $retrieval->queue($call);
         $call->refresh();
+
+        if (! $queued) {
+            $message = trim((string) $call->recording_provider_reference) === ''
+                ? 'Aucune référence de fichier audio n\'est disponible pour cet appel.'
+                : 'La récupération de cet enregistrement est déjà en cours.';
+
+            return response()->json([
+                'message' => $message,
+                'data' => ['state' => $call->recording_state],
+            ], 409);
+        }
 
         return response()->json([
             'data' => ['state' => $call->recording_state],
@@ -218,10 +265,13 @@ class CallSearchController extends Controller
         return [
             'id' => $call->id,
             'provider' => $call->provider,
+            'provider_call_id' => $call->provider_call_id,
             'record_id' => $call->production_record_id,
             'contract_reference' => $call->productionRecord?->contract_reference,
             'client_name' => $call->productionRecord?->client_name,
             'phone' => $call->matched_phone_e164 ?? $call->raw_phone,
+            'raw_phone' => $call->raw_phone,
+            'raw_destination' => $call->raw_destination,
             'direction' => $call->direction,
             'status' => $call->status,
             'started_at' => $call->started_at?->toISOString(),
@@ -235,6 +285,7 @@ class CallSearchController extends Controller
                 'mime' => $call->recording_mime,
                 'size' => $call->recording_size,
                 'retrieved_at' => $call->recording_retrieved_at?->toISOString(),
+                'error' => $call->recording_error,
             ],
         ];
     }

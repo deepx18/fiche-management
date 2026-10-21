@@ -7,9 +7,10 @@ namespace App\Services\Telephony\Issabel;
 use App\Services\Telephony\CallSearchQuery;
 use App\Services\Telephony\TelephonyException;
 use App\Services\Telephony\TelephonyNumber;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -34,6 +35,15 @@ class IssabelCdrRepository implements IssabelCdrReader
         $connection = (string) config('telephony.issabel.cdr_connection', 'issabel');
         $table = (string) config('telephony.issabel.cdr_table', 'cdr');
 
+        Log::info('Recherche CDR Issabel demandée', [
+            'connection' => $connection,
+            'table' => $table,
+            'phone' => TelephonyNumber::mask($query->e164),
+            'from' => $query->from->toDateTimeString(),
+            'to' => $query->to->toDateTimeString(),
+            'limit' => $query->limit,
+        ]);
+
         try {
             $columns = $this->columns($connection, $table);
         } catch (TelephonyException $e) {
@@ -51,6 +61,8 @@ class IssabelCdrRepository implements IssabelCdrReader
             }
         }
 
+        // Seules les colonnes réellement présentes sont sélectionnées : une
+        // colonne optionnelle absente ne doit jamais faire échouer la requête.
         $selected = array_values(array_intersect([
             'calldate', 'uniqueid', 'linkedid', 'src', 'dst',
             'duration', 'billsec', 'disposition', 'recordingfile',
@@ -58,7 +70,12 @@ class IssabelCdrRepository implements IssabelCdrReader
             (string) config('telephony.issabel.direction_column'),
         ], $columns));
 
-        $variants = TelephonyNumber::candidates($query->e164);
+        // Les CDR stockent souvent le numéro avec des séparateurs (« 06 12 34
+        // 56 78 », « +33 6 12 34 56 78 », « 06.12.34.56.78 »). Une égalité SQL
+        // brute raterait ces appels : on compare la forme « chiffres seuls »
+        // des colonnes fournisseur aux variantes E.164/nationales connues.
+        // Les valeurs restent des paramètres liés, jamais concaténées.
+        $variants = $this->digitVariants($query->e164);
 
         try {
             $rows = DB::connection($connection)
@@ -67,7 +84,8 @@ class IssabelCdrRepository implements IssabelCdrReader
                 ->where('calldate', '>=', $query->from->toDateTimeString())
                 ->where('calldate', '<=', $query->to->toDateTimeString())
                 ->where(function ($where) use ($variants): void {
-                    $where->whereIn('src', $variants)->orWhereIn('dst', $variants);
+                    $where->whereIn($this->digitsOnly('src'), $variants)
+                        ->orWhereIn($this->digitsOnly('dst'), $variants);
                 })
                 ->orderByDesc('calldate')
                 ->limit($query->limit)
@@ -87,7 +105,48 @@ class IssabelCdrRepository implements IssabelCdrReader
             }
         }
 
+        Log::info('Recherche CDR Issabel terminée', [
+            'phone' => TelephonyNumber::mask($query->e164),
+            'rows' => count($rows),
+            'matches' => count($matches),
+        ]);
+
         return $matches;
+    }
+
+    /**
+     * Variantes « chiffres seuls » utilisées dans la clause SQL.
+     *
+     * @return list<string>
+     */
+    private function digitVariants(string $e164): array
+    {
+        $variants = [];
+
+        foreach (TelephonyNumber::candidates($e164) as $candidate) {
+            $digits = preg_replace('/\D+/', '', $candidate) ?? '';
+            if ($digits !== '') {
+                $variants[] = $digits;
+            }
+        }
+
+        return array_values(array_unique($variants));
+    }
+
+    /**
+     * Expression SQL qui supprime les séparateurs usuels d'un numéro. Aucune
+     * valeur utilisateur n'y est interpolée : seuls les noms de colonnes, tous
+     * issus de la configuration applicative, sont utilisés.
+     */
+    private function digitsOnly(string $column): Expression
+    {
+        $expression = $column;
+
+        foreach ([' ', '-', '.', '(', ')', '+', '/'] as $separator) {
+            $expression = "REPLACE({$expression}, '{$separator}', '')";
+        }
+
+        return DB::raw($expression);
     }
 
     private function assertEnabled(): void
@@ -98,8 +157,9 @@ class IssabelCdrRepository implements IssabelCdrReader
             );
         }
 
-        $username = (string) config('database.connections.issabel.username', '');
-        $host = (string) config('database.connections.issabel.host', '');
+        $connection = (string) config('telephony.issabel.cdr_connection', 'issabel');
+        $username = (string) config("database.connections.{$connection}.username", '');
+        $host = (string) config("database.connections.{$connection}.host", '');
 
         if ($username === '' || $host === '') {
             throw TelephonyException::configuration(
@@ -118,13 +178,13 @@ class IssabelCdrRepository implements IssabelCdrReader
             return $this->columnCache[$key];
         }
 
-        if (! Schema::connection($connection)->hasTable($table)) {
+        if (! IssabelCdrSchema::hasTable($connection, $table)) {
             throw TelephonyException::configuration(
                 'Table CDR Issabel introuvable. Vérifiez ISSABEL_CDR_TABLE et la base asteriskcdrdb.'
             );
         }
 
-        $columns = Schema::connection($connection)->getColumnListing($table);
+        $columns = IssabelCdrSchema::columns($connection, $table);
 
         return $this->columnCache[$key] = array_values($columns);
     }
