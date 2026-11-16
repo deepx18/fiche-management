@@ -88,9 +88,10 @@ docker compose exec app php artisan migrate --force
 docker compose exec app php artisan admin:create
 ```
 
-Le site sera disponible sur `http://localhost:3000` (ou `FRONTEND_PORT` dans
-`.env`). Pour un serveur public, placez un proxy HTTPS/certificat TLS devant ce
-port et définissez `APP_URL` sur l'URL publique. Ne réutilisez pas les mots de
+Le site sera disponible sur `http://localhost` (port 80, configurable via
+`FRONTEND_PORT` dans `.env`). Pour un serveur public, placez un proxy
+HTTPS/certificat TLS devant ce port et définissez `APP_URL` sur l'URL publique.
+Ne réutilisez pas les mots de
 passe d'exemple. Les migrations sont explicites et doivent être exécutées après
 le démarrage initial, puis à chaque mise à jour qui en ajoute.
 
