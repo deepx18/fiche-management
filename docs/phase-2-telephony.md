@@ -128,8 +128,12 @@ existe.
 - `06 12 34 56 78`, `+33 6 12 34 56 78`, `0033612345678` → `+33612345678`.
 - Un `+212…` ou `+32…` **n'est jamais réécrit** en numéro français. La
   recherche le marque `invalid_phone` avec un message explicite.
-- Les valeurs fournisseur nationales, internationales et « chiffres seuls »
-  sont comparées après normalisation, jamais par égalité de chaînes.
+- La valeur fournisseur n'est pas normalisée : seuls ses séparateurs sont
+  retirés, puis le numéro stocké est recherché par inclusion de sous-chaîne.
+  `615574414` est donc retrouvé dans `33615574414` comme dans `00615574414`.
+  Aucun E.164 valide n'est exigé côté fournisseur.
+- Conséquence assumée : deux numéros de pays différents partageant les mêmes
+  chiffres nationaux ne peuvent pas être distingués par cette règle.
 - Un numéro partagé par plusieurs lignes de production rend la recherche
   **ambiguë** : aucune association automatique n'est effectuée.
 

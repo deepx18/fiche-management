@@ -15,15 +15,24 @@ use libphonenumber\PhoneNumberUtil;
  *  - un numéro national sans indicatif est interprété avec la région FR ;
  *  - un numéro portant explicitement un indicatif étranger n'est jamais
  *    réécrit en numéro français : `french()` le refuse, `e164()` le conserve ;
- *  - la comparaison se fait en E.164, jamais par égalité de chaînes brutes ;
+ *  - la comparaison ne normalise pas la valeur fournisseur : seuls ses
+ *    séparateurs sont retirés, puis le numéro stocké est recherché par
+ *    inclusion de sous-chaîne (« 06 15 57 44 14 » est retrouvé dans
+ *    « 33615574414 » comme dans « 00615574414 ») ;
  *  - les valeurs fournisseur nationales, internationales et « chiffres
- *    seuls » sont toutes ramenées à la même forme avant comparaison.
+ *    seuls » sont donc toutes reconnues sans exiger un E.164 valide.
  *
  * `PhoneNormalizer` (Phase 1) reste inchangé : il sert uniquement à la
  * recherche interne par sous-chaîne dans la table de production.
  */
 final class TelephonyNumber
 {
+    /**
+     * Longueur minimale d'une sous-chaîne recherchée : en dessous, une
+     * inclusion de chiffres ne prouve plus rien (faux positifs massifs).
+     */
+    private const MIN_MATCH_DIGITS = 6;
+
     private static ?PhoneNumberUtil $util = null;
 
     private static function util(): PhoneNumberUtil
@@ -100,12 +109,58 @@ final class TelephonyNumber
         ];
     }
 
-    /** Vrai si la valeur fournisseur correspond exactement au numéro cible. */
-    public static function matches(?string $raw, string $targetE164): bool
+    /**
+     * Vrai si le numéro stocké apparaît dans la valeur fournisseur.
+     *
+     * La valeur fournisseur est laissée telle quelle : on retire uniquement
+     * les séparateurs (« 06 12 34 56 78 », « +33 6 12 34 56 78 »,
+     * « 33612345678 », « 00612345678 », « 06.12.34.56.78 ») puis on cherche
+     * une des formes « chiffres seuls » du numéro stocké. Aucune valeur
+     * fournisseur n'est rejetée parce qu'elle ne serait pas un E.164 valide.
+     */
+    public static function matches(?string $providerValue, string $storedNumber): bool
     {
-        $e164 = self::e164($raw);
+        $haystack = self::digits($providerValue);
 
-        return $e164 !== null && hash_equals($targetE164, $e164);
+        if ($haystack === '') {
+            return false;
+        }
+
+        foreach (self::digitCandidates($storedNumber) as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Chiffres seuls d'une valeur brute, séparateurs retirés. */
+    public static function digits(?string $raw): string
+    {
+        return preg_replace('/\D+/', '', (string) $raw) ?? '';
+    }
+
+    /**
+     * Formes « chiffres seuls » d'un numéro, utilisées à l'identique par la
+     * clause SQL (`LIKE`) et par la vérification PHP : les deux filtres ne
+     * peuvent donc pas diverger.
+     *
+     * @return list<string>
+     */
+    public static function digitCandidates(string $number): array
+    {
+        $values = [];
+
+        foreach (self::candidates($number) as $candidate) {
+            $digits = self::digits($candidate);
+
+            if (strlen($digits) >= self::MIN_MATCH_DIGITS) {
+                $values[] = $digits;
+            }
+        }
+
+        return array_values(array_unique($values));
     }
 
     /**

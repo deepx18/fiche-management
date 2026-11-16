@@ -71,11 +71,16 @@ class IssabelCdrRepository implements IssabelCdrReader
         ], $columns));
 
         // Les CDR stockent souvent le numéro avec des séparateurs (« 06 12 34
-        // 56 78 », « +33 6 12 34 56 78 », « 06.12.34.56.78 »). Une égalité SQL
-        // brute raterait ces appels : on compare la forme « chiffres seuls »
-        // des colonnes fournisseur aux variantes E.164/nationales connues.
-        // Les valeurs restent des paramètres liés, jamais concaténées.
-        $variants = $this->digitVariants($query->e164);
+        // 56 78 », « +33 6 12 34 56 78 », « 06.12.34.56.78 ») ou sous une
+        // forme non normalisable (« 33612345678 », « 00612345678 »). On ne
+        // normalise donc pas la valeur fournisseur : on retire ses séparateurs
+        // et on cherche le numéro stocké par inclusion de sous-chaîne. Les
+        // valeurs restent des paramètres liés, jamais concaténés.
+        $variants = TelephonyNumber::digitCandidates($query->e164);
+
+        if ($variants === []) {
+            return [];
+        }
 
         try {
             $rows = DB::connection($connection)
@@ -84,8 +89,10 @@ class IssabelCdrRepository implements IssabelCdrReader
                 ->where('calldate', '>=', $query->from->toDateTimeString())
                 ->where('calldate', '<=', $query->to->toDateTimeString())
                 ->where(function ($where) use ($variants): void {
-                    $where->whereIn($this->digitsOnly('src'), $variants)
-                        ->orWhereIn($this->digitsOnly('dst'), $variants);
+                    foreach ($variants as $variant) {
+                        $where->orWhere($this->digitsOnly('src'), 'like', '%'.$variant.'%')
+                            ->orWhere($this->digitsOnly('dst'), 'like', '%'.$variant.'%');
+                    }
                 })
                 ->orderByDesc('calldate')
                 ->limit($query->limit)
@@ -112,25 +119,6 @@ class IssabelCdrRepository implements IssabelCdrReader
         ]);
 
         return $matches;
-    }
-
-    /**
-     * Variantes « chiffres seuls » utilisées dans la clause SQL.
-     *
-     * @return list<string>
-     */
-    private function digitVariants(string $e164): array
-    {
-        $variants = [];
-
-        foreach (TelephonyNumber::candidates($e164) as $candidate) {
-            $digits = preg_replace('/\D+/', '', $candidate) ?? '';
-            if ($digits !== '') {
-                $variants[] = $digits;
-            }
-        }
-
-        return array_values(array_unique($variants));
     }
 
     /**

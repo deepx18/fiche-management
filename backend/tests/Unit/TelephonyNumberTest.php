@@ -35,12 +35,31 @@ class TelephonyNumberTest extends TestCase
         $this->assertStringContainsString('étranger', (string) $result['reason']);
     }
 
-    public function test_matching_uses_normalized_values_not_raw_strings(): void
+    public function test_matching_checks_the_stored_number_inside_the_provider_value(): void
     {
-        $this->assertTrue(TelephonyNumber::matches('0612345678', '+33612345678'));
-        $this->assertTrue(TelephonyNumber::matches('+33 6 12 34 56 78', '+33612345678'));
-        $this->assertFalse(TelephonyNumber::matches('+212612345678', '+33612345678'));
+        // La valeur fournisseur n'est jamais normalisée : seuls ses séparateurs
+        // sont retirés, puis le numéro stocké est cherché par inclusion.
+        foreach ([
+            '0612345678',
+            '+33 6 12 34 56 78',
+            '33612345678',
+            '00612345678',
+            '(06) 12.34.56.78',
+        ] as $raw) {
+            $this->assertTrue(TelephonyNumber::matches($raw, '+33612345678'), $raw);
+        }
+
+        $this->assertFalse(TelephonyNumber::matches('+33700000000', '+33612345678'));
         $this->assertFalse(TelephonyNumber::matches(null, '+33612345678'));
+        $this->assertFalse(TelephonyNumber::matches('', '+33612345678'));
+    }
+
+    public function test_a_stored_number_without_leading_zero_or_country_code_is_found(): void
+    {
+        $this->assertTrue(TelephonyNumber::matches('33615574414', '615574414'));
+        $this->assertTrue(TelephonyNumber::matches('00615574414', '615574414'));
+        $this->assertTrue(TelephonyNumber::matches('0615574414', '+33615574414'));
+        $this->assertFalse(TelephonyNumber::matches('33615574415', '615574414'));
     }
 
     public function test_candidates_cover_provider_formats(): void
@@ -49,5 +68,13 @@ class TelephonyNumberTest extends TestCase
         $this->assertContains('33612345678', TelephonyNumber::candidates('+33612345678'));
         $this->assertContains('0612345678', TelephonyNumber::candidates('+33612345678'));
         $this->assertContains('612345678', TelephonyNumber::candidates('+33612345678'));
+    }
+
+    public function test_digit_candidates_are_shared_by_the_sql_and_php_matching(): void
+    {
+        $this->assertEqualsCanonicalizing(
+            ['33612345678', '0612345678', '0033612345678', '612345678'],
+            TelephonyNumber::digitCandidates('+33612345678'),
+        );
     }
 }

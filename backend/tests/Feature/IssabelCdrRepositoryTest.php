@@ -101,10 +101,29 @@ class IssabelCdrRepositoryTest extends TestCase
         );
     }
 
-    public function test_a_non_matching_number_is_not_returned(): void
+    public function test_provider_values_that_are_not_valid_e164_are_matched_by_inclusion(): void
     {
         $this->useCdrDatabase();
-        DB::connection('issabel')->table('cdr')->insert($this->row(['src' => '+212612345678']));
+
+        DB::connection('issabel')->table('cdr')->insert([
+            $this->row(['uniqueid' => 'country-code', 'src' => '33615574414']),
+            $this->row(['uniqueid' => 'double-zero', 'src' => '00615574414']),
+            $this->row(['uniqueid' => 'national-without-zero', 'dst' => '615574414']),
+            $this->row(['uniqueid' => 'other-number', 'src' => '33615574415']),
+        ]);
+
+        $matches = app(IssabelCdrRepository::class)->search($this->query('+33615574414'));
+
+        $this->assertEqualsCanonicalizing(
+            ['country-code', 'double-zero', 'national-without-zero'],
+            array_column($matches, 'uniqueid'),
+        );
+    }
+
+    public function test_a_number_whose_digits_are_absent_is_not_returned(): void
+    {
+        $this->useCdrDatabase();
+        DB::connection('issabel')->table('cdr')->insert($this->row(['src' => '+21270000000']));
 
         $this->assertSame([], app(IssabelCdrRepository::class)->search($this->query()));
     }

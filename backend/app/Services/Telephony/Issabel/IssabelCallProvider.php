@@ -75,8 +75,9 @@ class IssabelCallProvider implements CallProvider
         $srcMatches = TelephonyNumber::matches($src, $targetE164);
         $dstMatches = TelephonyNumber::matches($dst, $targetE164);
 
-        // Une ligne retournée par la requête doit correspondre réellement à
-        // la cible après normalisation ; aucune association approximative.
+        // La valeur CDR est conservée telle quelle : on vérifie seulement que
+        // le numéro stocké apparaît dans ses chiffres, ce qui couvre les formes
+        // « 33612345678 » ou « 00612345678 » que la normalisation rejetterait.
         if (! $srcMatches && ! $dstMatches) {
             return null;
         }

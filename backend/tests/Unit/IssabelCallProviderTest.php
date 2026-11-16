@@ -77,6 +77,33 @@ class IssabelCallProviderTest extends TestCase
         $this->assertSame('link-1', $call->metadata['linkedid'] ?? null);
     }
 
+    public function test_raw_provider_forms_are_matched_without_normalization(): void
+    {
+        $provider = $this->provider([
+            [
+                'uniqueid' => 'cdr-country-code',
+                'src' => '33612345678',
+                'dst' => '0140000000',
+                'calldate' => '2026-10-19 10:00:00',
+            ],
+            [
+                'uniqueid' => 'cdr-double-zero',
+                'src' => '00612345678',
+                'dst' => '0140000000',
+                'calldate' => '2026-10-19 10:00:00',
+            ],
+        ]);
+
+        $calls = $provider->search($this->query());
+
+        $this->assertCount(2, $calls);
+        $this->assertEqualsCanonicalizing(
+            ['cdr-country-code', 'cdr-double-zero'],
+            array_map(static fn ($call): string => $call->providerCallId, $calls),
+        );
+        $this->assertSame('33612345678', $calls[0]->rawPhone);
+    }
+
     public function test_rows_that_do_not_actually_match_the_target_are_discarded(): void
     {
         $provider = $this->provider([[
