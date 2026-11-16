@@ -1,0 +1,5 @@
+.agents/
+.env
+.env.*
+!.env.example
+.gitignore

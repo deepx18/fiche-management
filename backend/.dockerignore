@@ -1,0 +1,14 @@
+.git
+.env*
+.phpunit.cache
+.phpunit.result.cache
+auth.json
+vendor
+node_modules
+public/build
+public/hot
+public/storage
+storage
+tests
+database/database.sqlite
+*.log

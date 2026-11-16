@@ -6,7 +6,8 @@ téléphoniques, extraction conservatrice des contacts en doublon, exports
 nettoyés et restaurations.
 
 - `backend/` — API Laravel 12 (authentification Sanctum tokenizer, Excel via
-  maatwebsite/excel + PhpSpreadsheet, tests PHPUnit).- `frontend/` — Next.js 16 (React 19, Tailwind 4) existant, connecté à l'API
+  maatwebsite/excel + PhpSpreadsheet, tests PHPUnit).
+- `frontend/` — Next.js 16 (React 19, Tailwind 4) existant, connecté à l'API
   via un proxy la même-origine (`/api/*` → Laravel), sans qu'aucun écran ne
   dépende de données fictives pour les modules contact et production. Une page
   **Recherche globale** (`/recherche`) interroge les contacts de toutes les
@@ -24,7 +25,7 @@ de contrat unique et gère les numéros de téléphone des clients.
 - PHP >= 8.2 avec extensions usuelles (`pdo_sqlite`, `mbstring`, `zip`, `gd`, `intl`).
 - Composer >= 2.4
 - Node.js >= 20, npm
-- (Optionnel production) MySQL >= 8 et un serveur web capable d'héberger les deux apps.
+- Docker Engine et le plugin Docker Compose v2 (déploiement conteneurisé).
 
 ## 2. Installation
 
@@ -69,9 +70,60 @@ Tests backend :
 cd backend && php artisan test
 ```
 
+## Déploiement avec Docker Compose
+
+La stack de production comprend MySQL 8.4, PHP-FPM/Laravel, Nginx interne pour
+l'API, un worker de queue et le serveur Next.js. Seul le frontend est publié sur
+le port hôte ; les imports, sessions, cache et jobs sont persistés dans des
+volumes Docker.
+
+```bash
+cp .env.example .env
+# Remplacez les mots de passe de base de données par des valeurs fortes.
+docker compose build
+docker compose run --rm --no-deps app php artisan key:generate --show
+# Copiez la clé affichée dans APP_KEY du fichier .env.
+docker compose up -d
+docker compose exec app php artisan migrate --force
+docker compose exec app php artisan admin:create
+```
+
+Le site sera disponible sur `http://localhost:3000` (ou `FRONTEND_PORT` dans
+`.env`). Pour un serveur public, placez un proxy HTTPS/certificat TLS devant ce
+port et définissez `APP_URL` sur l'URL publique. Ne réutilisez pas les mots de
+passe d'exemple. Les migrations sont explicites et doivent être exécutées après
+le démarrage initial, puis à chaque mise à jour qui en ajoute.
+
+Commandes utiles :
+
+```bash
+docker compose logs -f
+docker compose ps
+docker compose down                  # conserve les volumes et les données
+docker compose up -d --build         # reconstruit et redéploie les images
+```
+
+`docker compose down -v` supprime également les données persistantes. Configurez les identifiants Google Sheets et les paramètres téléphonie dans
+`.env` si ces intégrations sont utilisées. Pour Google Sheets, déposez aussi le
+JSON du compte de service dans `storage/app/google/service-account.json` du
+conteneur `app` (le worker partage ce volume) :
+
+```bash
+docker compose exec -u root app mkdir -p /var/www/html/storage/app/google
+docker compose cp /secure/path/service-account.json app:/var/www/html/storage/app/google/service-account.json
+docker compose exec -u root app chown www-data:www-data /var/www/html/storage/app/google/service-account.json
+docker compose exec -u root app chmod 600 /var/www/html/storage/app/google/service-account.json
+```
+
+Pour sauvegarder, exportez MySQL et sauvegardez le volume `laravel_storage` ;
+les deux contiennent des données utilisateur.
+
 ## 4. Variables d'environnement
 
-Backend (`backend/.env`) :
+Pour Compose, ces valeurs viennent du fichier racine `.env` créé depuis
+`.env.example`. Une installation locale utilise `backend/.env`.
+
+Backend :
 
 | Variable | Rôle | Défaut dev |
 |---|---|---|
